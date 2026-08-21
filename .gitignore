@@ -1,0 +1,46 @@
+# Local environments and editor state
+/.venv/
+/.idea/
+/.vscode/
+
+# macOS metadata
+.DS_Store
+._*
+
+# Python bytecode, build output, and package metadata
+__pycache__/
+*.py[cod]
+*$py.class
+/build/
+/dist/
+*.egg-info/
+
+# Test, type-checking, lint, and coverage caches
+/.pytest_cache/
+/.mypy_cache/
+/.ruff_cache/
+/.hypothesis/
+/.tox/
+/.nox/
+/.coverage
+/.coverage.*
+/coverage.xml
+/htmlcov/
+
+# Local environment variables and secrets
+/.env
+/.env.*
+!/.env.example
+!/.env.template
+/.secrets/
+*.pem
+*.key
+
+# Generated Deep CFR runs and model checkpoints
+/artifacts/
+/checkpoints/
+/runs/
+/wandb/
+*.pt
+*.pth
+*.ckpt

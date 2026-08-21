@@ -1,0 +1,2539 @@
+{
+  "entries": {
+    "0648e6d97d41d47320350c9cf4c0403553e2b4b4a787fe5113b0af44cd32c012": {
+      "fingerprint": "0648e6d97d41d47320350c9cf4c0403553e2b4b4a787fe5113b0af44cd32c012",
+      "provenance": {
+        "generated_at": "2026-08-15T16:05:52.654184Z",
+        "platform_digest": "ac2c48a5baa0be8e05668d549608d2b3cf1a7583176e919630289adfc64f158d",
+        "schema_version": 2,
+        "semantics_version": 1,
+        "source": "preset"
+      },
+      "result": {
+        "chance_nodes": 178,
+        "count_kind": "lower_bound",
+        "elapsed_seconds": 31.672449499950744,
+        "exact": false,
+        "information_set_actions": 10782,
+        "information_sets": 2059,
+        "max_actions_per_information_set": 8,
+        "max_seconds": 300.0,
+        "max_states": 10000,
+        "parameters": {
+          "action_space_mode": "compact",
+          "board_side": "advanced",
+          "deluxe_investors": true,
+          "investor_mode": "none",
+          "player_count": 5,
+          "round_count": 6,
+          "rule_overrides": {},
+          "rules_profile": "deluxe"
+        },
+        "per_player_information_set_actions": {
+          "0": 288,
+          "1": 254,
+          "2": 260,
+          "3": 256,
+          "4": 9724
+        },
+        "per_player_information_sets": {
+          "0": 86,
+          "1": 74,
+          "2": 91,
+          "3": 77,
+          "4": 1731
+        },
+        "states_visited": 10000,
+        "terminal_states": 7763,
+        "truncation_reason": "max_states"
+      },
+      "semantic_rules": {
+        "action_codec_ranges": [
+          {
+            "namespace": "card_ordinal",
+            "start": 0,
+            "step": 1,
+            "stop": 6
+          },
+          {
+            "namespace": "pile",
+            "start": 6,
+            "step": 1,
+            "stop": 11
+          },
+          {
+            "namespace": "bid_level",
+            "start": 11,
+            "step": 1,
+            "stop": 19
+          },
+          {
+            "namespace": "company",
+            "start": 19,
+            "step": 1,
+            "stop": 25
+          },
+          {
+            "namespace": "done",
+            "start": 25,
+            "step": 1,
+            "stop": 26
+          },
+          {
+            "namespace": "direction",
+            "start": 26,
+            "step": 1,
+            "stop": 28
+          },
+          {
+            "namespace": "sale_mode",
+            "start": 28,
+            "step": 1,
+            "stop": 31
+          },
+          {
+            "namespace": "dividend_claim",
+            "start": 31,
+            "step": 1,
+            "stop": 33
+          },
+          {
+            "namespace": "use_ability",
+            "start": 33,
+            "step": 1,
+            "stop": 34
+          },
+          {
+            "namespace": "investor_slot",
+            "start": 34,
+            "step": 1,
+            "stop": 34
+          },
+          {
+            "namespace": "card_face",
+            "start": 34,
+            "step": 1,
+            "stop": 36
+          },
+          {
+            "namespace": "info_target",
+            "start": 36,
+            "step": 1,
+            "stop": 40
+          }
+        ],
+        "advanced_price_tracks": true,
+        "advanced_track_dividends": true,
+        "bankruptcy": true,
+        "bid_values": [
+          0,
+          1,
+          3,
+          6,
+          10,
+          15,
+          20,
+          25
+        ],
+        "blind_information_pairs": true,
+        "company_count": 6,
+        "company_names": [
+          "Cosmic Computers",
+          "Bottomline Bank",
+          "Leading Laboratories",
+          "American Automotive",
+          "Stanford Steel",
+          "Epic Electric"
+        ],
+        "dividend_reveal_choice": true,
+        "enabled_investors": [
+          "bill",
+          "broker_bernie",
+          "crazy_cramer",
+          "discount_donald",
+          "dividend_deborah",
+          "golden_graham",
+          "mayknow_martha",
+          "maverick_mark",
+          "secretive_stuart",
+          "wise_warren"
+        ],
+        "forecast_dividends": true,
+        "forecast_values": [
+          4,
+          2,
+          1,
+          "DIVIDEND",
+          -2,
+          -3
+        ],
+        "investors": true,
+        "majority_bonus": true,
+        "market_action_cards": true,
+        "max_chance_outcomes": 11,
+        "max_game_length": 2040,
+        "max_legal_actions": 8,
+        "meeples_per_player": 1,
+        "partial_sales": true,
+        "player_count": 5,
+        "private_pairs_per_player": 1,
+        "repeat_split_bonus": true,
+        "round_count": 6,
+        "semantic_payload_version": 1,
+        "starting_cash": 20,
+        "starting_price": 5,
+        "starting_shares_per_player": 1,
+        "stock_boom_cards": true,
+        "stock_bust_cards": true,
+        "stock_splits": true,
+        "stockpile_count": 5,
+        "supply_batches": 1,
+        "trading_fees": true,
+        "two_player_topology": "standard"
+      }
+    },
+    "07f19321d30ee4f2532c5de65da222b76b4ad10aec100d1140bebe88adc8fe9b": {
+      "fingerprint": "07f19321d30ee4f2532c5de65da222b76b4ad10aec100d1140bebe88adc8fe9b",
+      "provenance": {
+        "generated_at": "2026-08-15T16:03:12.511450Z",
+        "platform_digest": "ac2c48a5baa0be8e05668d549608d2b3cf1a7583176e919630289adfc64f158d",
+        "schema_version": 2,
+        "semantics_version": 1,
+        "source": "preset"
+      },
+      "result": {
+        "chance_nodes": 149,
+        "count_kind": "lower_bound",
+        "elapsed_seconds": 17.890249917050824,
+        "exact": false,
+        "information_set_actions": 10367,
+        "information_sets": 5047,
+        "max_actions_per_information_set": 7,
+        "max_seconds": 120.0,
+        "max_states": 10000,
+        "parameters": {
+          "action_space_mode": "compact",
+          "board_side": "standard",
+          "deluxe_investors": false,
+          "investor_mode": "none",
+          "player_count": 4,
+          "round_count": 6,
+          "rule_overrides": {},
+          "rules_profile": "classic"
+        },
+        "per_player_information_set_actions": {
+          "0": 2940,
+          "1": 1953,
+          "2": 1888,
+          "3": 3586
+        },
+        "per_player_information_sets": {
+          "0": 1440,
+          "1": 925,
+          "2": 915,
+          "3": 1767
+        },
+        "states_visited": 10000,
+        "terminal_states": 4804,
+        "truncation_reason": "max_states"
+      },
+      "semantic_rules": {
+        "action_codec_ranges": [
+          {
+            "namespace": "card_slot",
+            "start": 0,
+            "step": 1,
+            "stop": 2
+          },
+          {
+            "namespace": "pile",
+            "start": 2,
+            "step": 1,
+            "stop": 6
+          },
+          {
+            "namespace": "bid_level",
+            "start": 6,
+            "step": 1,
+            "stop": 14
+          },
+          {
+            "namespace": "company",
+            "start": 14,
+            "step": 1,
+            "stop": 20
+          },
+          {
+            "namespace": "done",
+            "start": 20,
+            "step": 1,
+            "stop": 21
+          },
+          {
+            "namespace": "direction",
+            "start": 21,
+            "step": 1,
+            "stop": 23
+          },
+          {
+            "namespace": "sale_mode",
+            "start": 23,
+            "step": 1,
+            "stop": 26
+          },
+          {
+            "namespace": "dividend_claim",
+            "start": 26,
+            "step": 1,
+            "stop": 28
+          }
+        ],
+        "advanced_price_tracks": false,
+        "advanced_track_dividends": false,
+        "bankruptcy": true,
+        "bid_values": [
+          0,
+          1,
+          3,
+          6,
+          10,
+          15,
+          20,
+          25
+        ],
+        "blind_information_pairs": true,
+        "company_count": 6,
+        "company_names": [
+          "Cosmic Computers",
+          "Bottomline Bank",
+          "Leading Laboratories",
+          "American Automotive",
+          "Stanford Steel",
+          "Epic Electric"
+        ],
+        "dividend_reveal_choice": true,
+        "enabled_investors": [],
+        "forecast_dividends": true,
+        "forecast_values": [
+          4,
+          2,
+          1,
+          "DIVIDEND",
+          -2,
+          -3
+        ],
+        "investors": false,
+        "majority_bonus": true,
+        "market_action_cards": true,
+        "max_chance_outcomes": 11,
+        "max_game_length": 1680,
+        "max_legal_actions": 8,
+        "meeples_per_player": 1,
+        "partial_sales": true,
+        "player_count": 4,
+        "private_pairs_per_player": 1,
+        "repeat_split_bonus": true,
+        "round_count": 6,
+        "semantic_payload_version": 1,
+        "starting_cash": 20,
+        "starting_price": 5,
+        "starting_shares_per_player": 1,
+        "stock_boom_cards": true,
+        "stock_bust_cards": true,
+        "stock_splits": true,
+        "stockpile_count": 4,
+        "supply_batches": 1,
+        "trading_fees": true,
+        "two_player_topology": "standard"
+      }
+    },
+    "178d57ee7c27e3d71d4711b943c90f4690b2416a4d6b0de3c3b10e857158caac": {
+      "fingerprint": "178d57ee7c27e3d71d4711b943c90f4690b2416a4d6b0de3c3b10e857158caac",
+      "provenance": {
+        "generated_at": "2026-08-15T16:03:12.508318Z",
+        "platform_digest": "ac2c48a5baa0be8e05668d549608d2b3cf1a7583176e919630289adfc64f158d",
+        "schema_version": 2,
+        "semantics_version": 1,
+        "source": "preset"
+      },
+      "result": {
+        "chance_nodes": 130,
+        "count_kind": "lower_bound",
+        "elapsed_seconds": 12.913123750011437,
+        "exact": false,
+        "information_set_actions": 10188,
+        "information_sets": 3405,
+        "max_actions_per_information_set": 7,
+        "max_seconds": 300.0,
+        "max_states": 10000,
+        "parameters": {
+          "action_space_mode": "compact",
+          "board_side": "standard",
+          "deluxe_investors": false,
+          "investor_mode": "none",
+          "player_count": 3,
+          "round_count": 6,
+          "rule_overrides": {},
+          "rules_profile": "classic"
+        },
+        "per_player_information_set_actions": {
+          "0": 503,
+          "1": 9485,
+          "2": 200
+        },
+        "per_player_information_sets": {
+          "0": 172,
+          "1": 3170,
+          "2": 63
+        },
+        "states_visited": 10000,
+        "terminal_states": 6465,
+        "truncation_reason": "max_states"
+      },
+      "semantic_rules": {
+        "action_codec_ranges": [
+          {
+            "namespace": "card_slot",
+            "start": 0,
+            "step": 1,
+            "stop": 2
+          },
+          {
+            "namespace": "pile",
+            "start": 2,
+            "step": 1,
+            "stop": 5
+          },
+          {
+            "namespace": "bid_level",
+            "start": 5,
+            "step": 1,
+            "stop": 13
+          },
+          {
+            "namespace": "company",
+            "start": 13,
+            "step": 1,
+            "stop": 19
+          },
+          {
+            "namespace": "done",
+            "start": 19,
+            "step": 1,
+            "stop": 20
+          },
+          {
+            "namespace": "direction",
+            "start": 20,
+            "step": 1,
+            "stop": 22
+          },
+          {
+            "namespace": "sale_mode",
+            "start": 22,
+            "step": 1,
+            "stop": 25
+          },
+          {
+            "namespace": "dividend_claim",
+            "start": 25,
+            "step": 1,
+            "stop": 27
+          }
+        ],
+        "advanced_price_tracks": false,
+        "advanced_track_dividends": false,
+        "bankruptcy": true,
+        "bid_values": [
+          0,
+          1,
+          3,
+          6,
+          10,
+          15,
+          20,
+          25
+        ],
+        "blind_information_pairs": true,
+        "company_count": 6,
+        "company_names": [
+          "Cosmic Computers",
+          "Bottomline Bank",
+          "Leading Laboratories",
+          "American Automotive",
+          "Stanford Steel",
+          "Epic Electric"
+        ],
+        "dividend_reveal_choice": true,
+        "enabled_investors": [],
+        "forecast_dividends": true,
+        "forecast_values": [
+          4,
+          2,
+          1,
+          "DIVIDEND",
+          -2,
+          -3
+        ],
+        "investors": false,
+        "majority_bonus": true,
+        "market_action_cards": true,
+        "max_chance_outcomes": 11,
+        "max_game_length": 1320,
+        "max_legal_actions": 8,
+        "meeples_per_player": 1,
+        "partial_sales": true,
+        "player_count": 3,
+        "private_pairs_per_player": 1,
+        "repeat_split_bonus": true,
+        "round_count": 6,
+        "semantic_payload_version": 1,
+        "starting_cash": 20,
+        "starting_price": 5,
+        "starting_shares_per_player": 1,
+        "stock_boom_cards": true,
+        "stock_bust_cards": true,
+        "stock_splits": true,
+        "stockpile_count": 3,
+        "supply_batches": 1,
+        "trading_fees": true,
+        "two_player_topology": "standard"
+      }
+    },
+    "2e0b2196c1494ce9c4c19e72191abe5ad1a4bfc2a7a4109d8e1f4f17fb3bbaef": {
+      "fingerprint": "2e0b2196c1494ce9c4c19e72191abe5ad1a4bfc2a7a4109d8e1f4f17fb3bbaef",
+      "provenance": {
+        "generated_at": "2026-08-15T16:05:05.040324Z",
+        "platform_digest": "ac2c48a5baa0be8e05668d549608d2b3cf1a7583176e919630289adfc64f158d",
+        "schema_version": 2,
+        "semantics_version": 1,
+        "source": "preset"
+      },
+      "result": {
+        "chance_nodes": 155,
+        "count_kind": "lower_bound",
+        "elapsed_seconds": 23.4188926249044,
+        "exact": false,
+        "information_set_actions": 10644,
+        "information_sets": 5079,
+        "max_actions_per_information_set": 8,
+        "max_seconds": 120.0,
+        "max_states": 10000,
+        "parameters": {
+          "action_space_mode": "compact",
+          "board_side": "advanced",
+          "deluxe_investors": true,
+          "investor_mode": "none",
+          "player_count": 2,
+          "round_count": 6,
+          "rule_overrides": {},
+          "rules_profile": "deluxe"
+        },
+        "per_player_information_set_actions": {
+          "0": 4881,
+          "1": 5763
+        },
+        "per_player_information_sets": {
+          "0": 2330,
+          "1": 2749
+        },
+        "states_visited": 10000,
+        "terminal_states": 4766,
+        "truncation_reason": "max_states"
+      },
+      "semantic_rules": {
+        "action_codec_ranges": [
+          {
+            "namespace": "card_ordinal",
+            "start": 0,
+            "step": 1,
+            "stop": 6
+          },
+          {
+            "namespace": "pile",
+            "start": 6,
+            "step": 1,
+            "stop": 10
+          },
+          {
+            "namespace": "bid_level",
+            "start": 10,
+            "step": 1,
+            "stop": 18
+          },
+          {
+            "namespace": "company",
+            "start": 18,
+            "step": 1,
+            "stop": 24
+          },
+          {
+            "namespace": "done",
+            "start": 24,
+            "step": 1,
+            "stop": 25
+          },
+          {
+            "namespace": "direction",
+            "start": 25,
+            "step": 1,
+            "stop": 27
+          },
+          {
+            "namespace": "sale_mode",
+            "start": 27,
+            "step": 1,
+            "stop": 30
+          },
+          {
+            "namespace": "dividend_claim",
+            "start": 30,
+            "step": 1,
+            "stop": 32
+          },
+          {
+            "namespace": "use_ability",
+            "start": 32,
+            "step": 1,
+            "stop": 33
+          },
+          {
+            "namespace": "investor_slot",
+            "start": 33,
+            "step": 1,
+            "stop": 35
+          },
+          {
+            "namespace": "card_face",
+            "start": 35,
+            "step": 1,
+            "stop": 37
+          },
+          {
+            "namespace": "info_target",
+            "start": 37,
+            "step": 1,
+            "stop": 41
+          }
+        ],
+        "advanced_price_tracks": true,
+        "advanced_track_dividends": true,
+        "bankruptcy": true,
+        "bid_values": [
+          0,
+          1,
+          3,
+          6,
+          10,
+          15,
+          20,
+          25
+        ],
+        "blind_information_pairs": true,
+        "company_count": 6,
+        "company_names": [
+          "Cosmic Computers",
+          "Bottomline Bank",
+          "Leading Laboratories",
+          "American Automotive",
+          "Stanford Steel",
+          "Epic Electric"
+        ],
+        "dividend_reveal_choice": true,
+        "enabled_investors": [
+          "bill",
+          "broker_bernie",
+          "crazy_cramer",
+          "discount_donald",
+          "dividend_deborah",
+          "golden_graham",
+          "mayknow_martha",
+          "maverick_mark",
+          "secretive_stuart",
+          "wise_warren"
+        ],
+        "forecast_dividends": true,
+        "forecast_values": [
+          4,
+          2,
+          1,
+          "DIVIDEND",
+          -2,
+          -3
+        ],
+        "investors": true,
+        "majority_bonus": true,
+        "market_action_cards": true,
+        "max_chance_outcomes": 11,
+        "max_game_length": 1392,
+        "max_legal_actions": 8,
+        "meeples_per_player": 2,
+        "partial_sales": true,
+        "player_count": 2,
+        "private_pairs_per_player": 2,
+        "repeat_split_bonus": true,
+        "round_count": 6,
+        "semantic_payload_version": 1,
+        "starting_cash": 30,
+        "starting_price": 5,
+        "starting_shares_per_player": 1,
+        "stock_boom_cards": true,
+        "stock_bust_cards": true,
+        "stock_splits": true,
+        "stockpile_count": 4,
+        "supply_batches": 2,
+        "trading_fees": true,
+        "two_player_topology": "official"
+      }
+    },
+    "2f7e231622f811fa38a948903d1c500ef86971a0da33653a91e6613dff066b5e": {
+      "fingerprint": "2f7e231622f811fa38a948903d1c500ef86971a0da33653a91e6613dff066b5e",
+      "provenance": {
+        "generated_at": "2026-08-15T16:03:36.047121Z",
+        "platform_digest": "ac2c48a5baa0be8e05668d549608d2b3cf1a7583176e919630289adfc64f158d",
+        "schema_version": 2,
+        "semantics_version": 1,
+        "source": "preset"
+      },
+      "result": {
+        "chance_nodes": 168,
+        "count_kind": "lower_bound",
+        "elapsed_seconds": 23.507776334066875,
+        "exact": false,
+        "information_set_actions": 10647,
+        "information_sets": 3492,
+        "max_actions_per_information_set": 8,
+        "max_seconds": 300.0,
+        "max_states": 10000,
+        "parameters": {
+          "action_space_mode": "compact",
+          "board_side": "standard",
+          "deluxe_investors": false,
+          "investor_mode": "none",
+          "player_count": 5,
+          "round_count": 6,
+          "rule_overrides": {},
+          "rules_profile": "classic"
+        },
+        "per_player_information_set_actions": {
+          "0": 175,
+          "1": 220,
+          "2": 199,
+          "3": 315,
+          "4": 9738
+        },
+        "per_player_information_sets": {
+          "0": 54,
+          "1": 66,
+          "2": 60,
+          "3": 81,
+          "4": 3231
+        },
+        "states_visited": 10000,
+        "terminal_states": 6340,
+        "truncation_reason": "max_states"
+      },
+      "semantic_rules": {
+        "action_codec_ranges": [
+          {
+            "namespace": "card_slot",
+            "start": 0,
+            "step": 1,
+            "stop": 2
+          },
+          {
+            "namespace": "pile",
+            "start": 2,
+            "step": 1,
+            "stop": 7
+          },
+          {
+            "namespace": "bid_level",
+            "start": 7,
+            "step": 1,
+            "stop": 15
+          },
+          {
+            "namespace": "company",
+            "start": 15,
+            "step": 1,
+            "stop": 21
+          },
+          {
+            "namespace": "done",
+            "start": 21,
+            "step": 1,
+            "stop": 22
+          },
+          {
+            "namespace": "direction",
+            "start": 22,
+            "step": 1,
+            "stop": 24
+          },
+          {
+            "namespace": "sale_mode",
+            "start": 24,
+            "step": 1,
+            "stop": 27
+          },
+          {
+            "namespace": "dividend_claim",
+            "start": 27,
+            "step": 1,
+            "stop": 29
+          }
+        ],
+        "advanced_price_tracks": false,
+        "advanced_track_dividends": false,
+        "bankruptcy": true,
+        "bid_values": [
+          0,
+          1,
+          3,
+          6,
+          10,
+          15,
+          20,
+          25
+        ],
+        "blind_information_pairs": true,
+        "company_count": 6,
+        "company_names": [
+          "Cosmic Computers",
+          "Bottomline Bank",
+          "Leading Laboratories",
+          "American Automotive",
+          "Stanford Steel",
+          "Epic Electric"
+        ],
+        "dividend_reveal_choice": true,
+        "enabled_investors": [],
+        "forecast_dividends": true,
+        "forecast_values": [
+          4,
+          2,
+          1,
+          "DIVIDEND",
+          -2,
+          -3
+        ],
+        "investors": false,
+        "majority_bonus": true,
+        "market_action_cards": true,
+        "max_chance_outcomes": 11,
+        "max_game_length": 2040,
+        "max_legal_actions": 8,
+        "meeples_per_player": 1,
+        "partial_sales": true,
+        "player_count": 5,
+        "private_pairs_per_player": 1,
+        "repeat_split_bonus": true,
+        "round_count": 6,
+        "semantic_payload_version": 1,
+        "starting_cash": 20,
+        "starting_price": 5,
+        "starting_shares_per_player": 1,
+        "stock_boom_cards": true,
+        "stock_bust_cards": true,
+        "stock_splits": true,
+        "stockpile_count": 5,
+        "supply_batches": 1,
+        "trading_fees": true,
+        "two_player_topology": "standard"
+      }
+    },
+    "3def9cfec75f6caf1cc602b14b74ce2132f4cc8ad2a4b49091afb472ef63be87": {
+      "fingerprint": "3def9cfec75f6caf1cc602b14b74ce2132f4cc8ad2a4b49091afb472ef63be87",
+      "provenance": {
+        "generated_at": "2026-08-15T16:03:57.283919Z",
+        "platform_digest": "ac2c48a5baa0be8e05668d549608d2b3cf1a7583176e919630289adfc64f158d",
+        "schema_version": 2,
+        "semantics_version": 1,
+        "source": "preset"
+      },
+      "result": {
+        "chance_nodes": 147,
+        "count_kind": "lower_bound",
+        "elapsed_seconds": 21.214377416996285,
+        "exact": false,
+        "information_set_actions": 10591,
+        "information_sets": 5069,
+        "max_actions_per_information_set": 8,
+        "max_seconds": 300.0,
+        "max_states": 10000,
+        "parameters": {
+          "action_space_mode": "compact",
+          "board_side": "advanced",
+          "deluxe_investors": false,
+          "investor_mode": "none",
+          "player_count": 2,
+          "round_count": 6,
+          "rule_overrides": {},
+          "rules_profile": "deluxe"
+        },
+        "per_player_information_set_actions": {
+          "0": 9853,
+          "1": 738
+        },
+        "per_player_information_sets": {
+          "0": 4812,
+          "1": 257
+        },
+        "states_visited": 10000,
+        "terminal_states": 4784,
+        "truncation_reason": "max_states"
+      },
+      "semantic_rules": {
+        "action_codec_ranges": [
+          {
+            "namespace": "card_slot",
+            "start": 0,
+            "step": 1,
+            "stop": 2
+          },
+          {
+            "namespace": "pile",
+            "start": 2,
+            "step": 1,
+            "stop": 6
+          },
+          {
+            "namespace": "bid_level",
+            "start": 6,
+            "step": 1,
+            "stop": 14
+          },
+          {
+            "namespace": "company",
+            "start": 14,
+            "step": 1,
+            "stop": 20
+          },
+          {
+            "namespace": "done",
+            "start": 20,
+            "step": 1,
+            "stop": 21
+          },
+          {
+            "namespace": "direction",
+            "start": 21,
+            "step": 1,
+            "stop": 23
+          },
+          {
+            "namespace": "sale_mode",
+            "start": 23,
+            "step": 1,
+            "stop": 26
+          },
+          {
+            "namespace": "dividend_claim",
+            "start": 26,
+            "step": 1,
+            "stop": 28
+          }
+        ],
+        "advanced_price_tracks": true,
+        "advanced_track_dividends": true,
+        "bankruptcy": true,
+        "bid_values": [
+          0,
+          1,
+          3,
+          6,
+          10,
+          15,
+          20,
+          25
+        ],
+        "blind_information_pairs": true,
+        "company_count": 6,
+        "company_names": [
+          "Cosmic Computers",
+          "Bottomline Bank",
+          "Leading Laboratories",
+          "American Automotive",
+          "Stanford Steel",
+          "Epic Electric"
+        ],
+        "dividend_reveal_choice": true,
+        "enabled_investors": [],
+        "forecast_dividends": true,
+        "forecast_values": [
+          4,
+          2,
+          1,
+          "DIVIDEND",
+          -2,
+          -3
+        ],
+        "investors": false,
+        "majority_bonus": true,
+        "market_action_cards": true,
+        "max_chance_outcomes": 11,
+        "max_game_length": 1392,
+        "max_legal_actions": 8,
+        "meeples_per_player": 2,
+        "partial_sales": true,
+        "player_count": 2,
+        "private_pairs_per_player": 2,
+        "repeat_split_bonus": true,
+        "round_count": 6,
+        "semantic_payload_version": 1,
+        "starting_cash": 30,
+        "starting_price": 5,
+        "starting_shares_per_player": 1,
+        "stock_boom_cards": true,
+        "stock_bust_cards": true,
+        "stock_splits": true,
+        "stockpile_count": 4,
+        "supply_batches": 2,
+        "trading_fees": true,
+        "two_player_topology": "official"
+      }
+    },
+    "6888584cf5accdc96aa95c6c7df5d969471733784f3047bff753fe222429f8e0": {
+      "fingerprint": "6888584cf5accdc96aa95c6c7df5d969471733784f3047bff753fe222429f8e0",
+      "provenance": {
+        "generated_at": "2026-08-15T16:02:59.577716Z",
+        "platform_digest": "ac2c48a5baa0be8e05668d549608d2b3cf1a7583176e919630289adfc64f158d",
+        "schema_version": 2,
+        "semantics_version": 1,
+        "source": "preset"
+      },
+      "result": {
+        "chance_nodes": 163,
+        "count_kind": "lower_bound",
+        "elapsed_seconds": 19.65807487501297,
+        "exact": false,
+        "information_set_actions": 10465,
+        "information_sets": 3453,
+        "max_actions_per_information_set": 7,
+        "max_seconds": 300.0,
+        "max_states": 10000,
+        "parameters": {
+          "action_space_mode": "compact",
+          "board_side": "standard",
+          "deluxe_investors": false,
+          "investor_mode": "none",
+          "player_count": 5,
+          "round_count": 6,
+          "rule_overrides": {},
+          "rules_profile": "lite"
+        },
+        "per_player_information_set_actions": {
+          "0": 174,
+          "1": 142,
+          "2": 191,
+          "3": 875,
+          "4": 9083
+        },
+        "per_player_information_sets": {
+          "0": 52,
+          "1": 44,
+          "2": 58,
+          "3": 275,
+          "4": 3024
+        },
+        "states_visited": 10000,
+        "terminal_states": 6384,
+        "truncation_reason": "max_states"
+      },
+      "semantic_rules": {
+        "action_codec_ranges": [
+          {
+            "namespace": "card_slot",
+            "start": 0,
+            "step": 1,
+            "stop": 2
+          },
+          {
+            "namespace": "pile",
+            "start": 2,
+            "step": 1,
+            "stop": 7
+          },
+          {
+            "namespace": "bid_level",
+            "start": 7,
+            "step": 1,
+            "stop": 15
+          },
+          {
+            "namespace": "done",
+            "start": 15,
+            "step": 1,
+            "stop": 16
+          },
+          {
+            "namespace": "sale_mode",
+            "start": 16,
+            "step": 1,
+            "stop": 19
+          }
+        ],
+        "advanced_price_tracks": false,
+        "advanced_track_dividends": false,
+        "bankruptcy": true,
+        "bid_values": [
+          0,
+          1,
+          3,
+          6,
+          10,
+          15,
+          20,
+          25
+        ],
+        "blind_information_pairs": true,
+        "company_count": 6,
+        "company_names": [
+          "Cosmic Computers",
+          "Bottomline Bank",
+          "Leading Laboratories",
+          "American Automotive",
+          "Stanford Steel",
+          "Epic Electric"
+        ],
+        "dividend_reveal_choice": false,
+        "enabled_investors": [],
+        "forecast_dividends": false,
+        "forecast_values": [
+          4,
+          2,
+          1,
+          0,
+          -2,
+          -3
+        ],
+        "investors": false,
+        "majority_bonus": false,
+        "market_action_cards": false,
+        "max_chance_outcomes": 6,
+        "max_game_length": 2040,
+        "max_legal_actions": 8,
+        "meeples_per_player": 1,
+        "partial_sales": true,
+        "player_count": 5,
+        "private_pairs_per_player": 1,
+        "repeat_split_bonus": false,
+        "round_count": 6,
+        "semantic_payload_version": 1,
+        "starting_cash": 20,
+        "starting_price": 5,
+        "starting_shares_per_player": 0,
+        "stock_boom_cards": false,
+        "stock_bust_cards": false,
+        "stock_splits": false,
+        "stockpile_count": 5,
+        "supply_batches": 1,
+        "trading_fees": false,
+        "two_player_topology": "standard"
+      }
+    },
+    "81027223c300ba52464cf022e8c4d9eead5107ec2e13dcad313c608fc16c7ea2": {
+      "fingerprint": "81027223c300ba52464cf022e8c4d9eead5107ec2e13dcad313c608fc16c7ea2",
+      "provenance": {
+        "generated_at": "2026-08-15T16:05:20.949719Z",
+        "platform_digest": "ac2c48a5baa0be8e05668d549608d2b3cf1a7583176e919630289adfc64f158d",
+        "schema_version": 2,
+        "semantics_version": 1,
+        "source": "preset"
+      },
+      "result": {
+        "chance_nodes": 157,
+        "count_kind": "lower_bound",
+        "elapsed_seconds": 22.233285333029926,
+        "exact": false,
+        "information_set_actions": 10462,
+        "information_sets": 5076,
+        "max_actions_per_information_set": 8,
+        "max_seconds": 120.0,
+        "max_states": 10000,
+        "parameters": {
+          "action_space_mode": "compact",
+          "board_side": "advanced",
+          "deluxe_investors": true,
+          "investor_mode": "none",
+          "player_count": 4,
+          "round_count": 6,
+          "rule_overrides": {},
+          "rules_profile": "deluxe"
+        },
+        "per_player_information_set_actions": {
+          "0": 2949,
+          "1": 1947,
+          "2": 1928,
+          "3": 3638
+        },
+        "per_player_information_sets": {
+          "0": 1437,
+          "1": 925,
+          "2": 933,
+          "3": 1781
+        },
+        "states_visited": 10000,
+        "terminal_states": 4767,
+        "truncation_reason": "max_states"
+      },
+      "semantic_rules": {
+        "action_codec_ranges": [
+          {
+            "namespace": "card_ordinal",
+            "start": 0,
+            "step": 1,
+            "stop": 5
+          },
+          {
+            "namespace": "pile",
+            "start": 5,
+            "step": 1,
+            "stop": 9
+          },
+          {
+            "namespace": "bid_level",
+            "start": 9,
+            "step": 1,
+            "stop": 17
+          },
+          {
+            "namespace": "company",
+            "start": 17,
+            "step": 1,
+            "stop": 23
+          },
+          {
+            "namespace": "done",
+            "start": 23,
+            "step": 1,
+            "stop": 24
+          },
+          {
+            "namespace": "direction",
+            "start": 24,
+            "step": 1,
+            "stop": 26
+          },
+          {
+            "namespace": "sale_mode",
+            "start": 26,
+            "step": 1,
+            "stop": 29
+          },
+          {
+            "namespace": "dividend_claim",
+            "start": 29,
+            "step": 1,
+            "stop": 31
+          },
+          {
+            "namespace": "use_ability",
+            "start": 31,
+            "step": 1,
+            "stop": 32
+          },
+          {
+            "namespace": "investor_slot",
+            "start": 32,
+            "step": 1,
+            "stop": 32
+          },
+          {
+            "namespace": "card_face",
+            "start": 32,
+            "step": 1,
+            "stop": 34
+          },
+          {
+            "namespace": "info_target",
+            "start": 34,
+            "step": 1,
+            "stop": 38
+          }
+        ],
+        "advanced_price_tracks": true,
+        "advanced_track_dividends": true,
+        "bankruptcy": true,
+        "bid_values": [
+          0,
+          1,
+          3,
+          6,
+          10,
+          15,
+          20,
+          25
+        ],
+        "blind_information_pairs": true,
+        "company_count": 6,
+        "company_names": [
+          "Cosmic Computers",
+          "Bottomline Bank",
+          "Leading Laboratories",
+          "American Automotive",
+          "Stanford Steel",
+          "Epic Electric"
+        ],
+        "dividend_reveal_choice": true,
+        "enabled_investors": [
+          "bill",
+          "broker_bernie",
+          "crazy_cramer",
+          "discount_donald",
+          "dividend_deborah",
+          "golden_graham",
+          "mayknow_martha",
+          "maverick_mark",
+          "secretive_stuart",
+          "wise_warren"
+        ],
+        "forecast_dividends": true,
+        "forecast_values": [
+          4,
+          2,
+          1,
+          "DIVIDEND",
+          -2,
+          -3
+        ],
+        "investors": true,
+        "majority_bonus": true,
+        "market_action_cards": true,
+        "max_chance_outcomes": 11,
+        "max_game_length": 1680,
+        "max_legal_actions": 8,
+        "meeples_per_player": 1,
+        "partial_sales": true,
+        "player_count": 4,
+        "private_pairs_per_player": 1,
+        "repeat_split_bonus": true,
+        "round_count": 6,
+        "semantic_payload_version": 1,
+        "starting_cash": 20,
+        "starting_price": 5,
+        "starting_shares_per_player": 1,
+        "stock_boom_cards": true,
+        "stock_bust_cards": true,
+        "stock_splits": true,
+        "stockpile_count": 4,
+        "supply_batches": 1,
+        "trading_fees": true,
+        "two_player_topology": "standard"
+      }
+    },
+    "8af193731bf90e1a986fac1187f3191417a393627314b2cf4342d351c28741de": {
+      "fingerprint": "8af193731bf90e1a986fac1187f3191417a393627314b2cf4342d351c28741de",
+      "provenance": {
+        "generated_at": "2026-08-15T16:04:35.911697Z",
+        "platform_digest": "ac2c48a5baa0be8e05668d549608d2b3cf1a7583176e919630289adfc64f158d",
+        "schema_version": 2,
+        "semantics_version": 1,
+        "source": "preset"
+      },
+      "result": {
+        "chance_nodes": 149,
+        "count_kind": "lower_bound",
+        "elapsed_seconds": 23.81637833302375,
+        "exact": false,
+        "information_set_actions": 10605,
+        "information_sets": 5091,
+        "max_actions_per_information_set": 8,
+        "max_seconds": 300.0,
+        "max_states": 10000,
+        "parameters": {
+          "action_space_mode": "compact",
+          "board_side": "advanced",
+          "deluxe_investors": false,
+          "investor_mode": "none",
+          "player_count": 4,
+          "round_count": 6,
+          "rule_overrides": {},
+          "rules_profile": "deluxe"
+        },
+        "per_player_information_set_actions": {
+          "0": 3041,
+          "1": 253,
+          "2": 3705,
+          "3": 3606
+        },
+        "per_player_information_sets": {
+          "0": 1451,
+          "1": 87,
+          "2": 1782,
+          "3": 1771
+        },
+        "states_visited": 10000,
+        "terminal_states": 4760,
+        "truncation_reason": "max_states"
+      },
+      "semantic_rules": {
+        "action_codec_ranges": [
+          {
+            "namespace": "card_slot",
+            "start": 0,
+            "step": 1,
+            "stop": 2
+          },
+          {
+            "namespace": "pile",
+            "start": 2,
+            "step": 1,
+            "stop": 6
+          },
+          {
+            "namespace": "bid_level",
+            "start": 6,
+            "step": 1,
+            "stop": 14
+          },
+          {
+            "namespace": "company",
+            "start": 14,
+            "step": 1,
+            "stop": 20
+          },
+          {
+            "namespace": "done",
+            "start": 20,
+            "step": 1,
+            "stop": 21
+          },
+          {
+            "namespace": "direction",
+            "start": 21,
+            "step": 1,
+            "stop": 23
+          },
+          {
+            "namespace": "sale_mode",
+            "start": 23,
+            "step": 1,
+            "stop": 26
+          },
+          {
+            "namespace": "dividend_claim",
+            "start": 26,
+            "step": 1,
+            "stop": 28
+          }
+        ],
+        "advanced_price_tracks": true,
+        "advanced_track_dividends": true,
+        "bankruptcy": true,
+        "bid_values": [
+          0,
+          1,
+          3,
+          6,
+          10,
+          15,
+          20,
+          25
+        ],
+        "blind_information_pairs": true,
+        "company_count": 6,
+        "company_names": [
+          "Cosmic Computers",
+          "Bottomline Bank",
+          "Leading Laboratories",
+          "American Automotive",
+          "Stanford Steel",
+          "Epic Electric"
+        ],
+        "dividend_reveal_choice": true,
+        "enabled_investors": [],
+        "forecast_dividends": true,
+        "forecast_values": [
+          4,
+          2,
+          1,
+          "DIVIDEND",
+          -2,
+          -3
+        ],
+        "investors": false,
+        "majority_bonus": true,
+        "market_action_cards": true,
+        "max_chance_outcomes": 11,
+        "max_game_length": 1680,
+        "max_legal_actions": 8,
+        "meeples_per_player": 1,
+        "partial_sales": true,
+        "player_count": 4,
+        "private_pairs_per_player": 1,
+        "repeat_split_bonus": true,
+        "round_count": 6,
+        "semantic_payload_version": 1,
+        "starting_cash": 20,
+        "starting_price": 5,
+        "starting_shares_per_player": 1,
+        "stock_boom_cards": true,
+        "stock_bust_cards": true,
+        "stock_splits": true,
+        "stockpile_count": 4,
+        "supply_batches": 1,
+        "trading_fees": true,
+        "two_player_topology": "standard"
+      }
+    },
+    "acd568f710bf60a6b59a852898b8d61e098ae4ee89acd9d8591f258d14ff125a": {
+      "fingerprint": "acd568f710bf60a6b59a852898b8d61e098ae4ee89acd9d8591f258d14ff125a",
+      "provenance": {
+        "generated_at": "2026-08-15T16:02:59.581089Z",
+        "platform_digest": "ac2c48a5baa0be8e05668d549608d2b3cf1a7583176e919630289adfc64f158d",
+        "schema_version": 2,
+        "semantics_version": 1,
+        "source": "preset"
+      },
+      "result": {
+        "chance_nodes": 147,
+        "count_kind": "lower_bound",
+        "elapsed_seconds": 17.713342541945167,
+        "exact": false,
+        "information_set_actions": 10336,
+        "information_sets": 5040,
+        "max_actions_per_information_set": 8,
+        "max_seconds": 120.0,
+        "max_states": 10000,
+        "parameters": {
+          "action_space_mode": "compact",
+          "board_side": "standard",
+          "deluxe_investors": false,
+          "investor_mode": "none",
+          "player_count": 2,
+          "round_count": 6,
+          "rule_overrides": {},
+          "rules_profile": "classic"
+        },
+        "per_player_information_set_actions": {
+          "0": 4770,
+          "1": 5566
+        },
+        "per_player_information_sets": {
+          "0": 2315,
+          "1": 2725
+        },
+        "states_visited": 10000,
+        "terminal_states": 4813,
+        "truncation_reason": "max_states"
+      },
+      "semantic_rules": {
+        "action_codec_ranges": [
+          {
+            "namespace": "card_slot",
+            "start": 0,
+            "step": 1,
+            "stop": 2
+          },
+          {
+            "namespace": "pile",
+            "start": 2,
+            "step": 1,
+            "stop": 6
+          },
+          {
+            "namespace": "bid_level",
+            "start": 6,
+            "step": 1,
+            "stop": 14
+          },
+          {
+            "namespace": "company",
+            "start": 14,
+            "step": 1,
+            "stop": 20
+          },
+          {
+            "namespace": "done",
+            "start": 20,
+            "step": 1,
+            "stop": 21
+          },
+          {
+            "namespace": "direction",
+            "start": 21,
+            "step": 1,
+            "stop": 23
+          },
+          {
+            "namespace": "sale_mode",
+            "start": 23,
+            "step": 1,
+            "stop": 26
+          },
+          {
+            "namespace": "dividend_claim",
+            "start": 26,
+            "step": 1,
+            "stop": 28
+          }
+        ],
+        "advanced_price_tracks": false,
+        "advanced_track_dividends": false,
+        "bankruptcy": true,
+        "bid_values": [
+          0,
+          1,
+          3,
+          6,
+          10,
+          15,
+          20,
+          25
+        ],
+        "blind_information_pairs": true,
+        "company_count": 6,
+        "company_names": [
+          "Cosmic Computers",
+          "Bottomline Bank",
+          "Leading Laboratories",
+          "American Automotive",
+          "Stanford Steel",
+          "Epic Electric"
+        ],
+        "dividend_reveal_choice": true,
+        "enabled_investors": [],
+        "forecast_dividends": true,
+        "forecast_values": [
+          4,
+          2,
+          1,
+          "DIVIDEND",
+          -2,
+          -3
+        ],
+        "investors": false,
+        "majority_bonus": true,
+        "market_action_cards": true,
+        "max_chance_outcomes": 11,
+        "max_game_length": 1392,
+        "max_legal_actions": 8,
+        "meeples_per_player": 2,
+        "partial_sales": true,
+        "player_count": 2,
+        "private_pairs_per_player": 2,
+        "repeat_split_bonus": true,
+        "round_count": 6,
+        "semantic_payload_version": 1,
+        "starting_cash": 30,
+        "starting_price": 5,
+        "starting_shares_per_player": 1,
+        "stock_boom_cards": true,
+        "stock_bust_cards": true,
+        "stock_splits": true,
+        "stockpile_count": 4,
+        "supply_batches": 2,
+        "trading_fees": true,
+        "two_player_topology": "official"
+      }
+    },
+    "b134dcbfcccc69bb8765d6c2d0452a4a8efc2ee5c1739abc0e3949e0128b4db6": {
+      "fingerprint": "b134dcbfcccc69bb8765d6c2d0452a4a8efc2ee5c1739abc0e3949e0128b4db6",
+      "provenance": {
+        "generated_at": "2026-08-15T16:02:13.320218Z",
+        "platform_digest": "ac2c48a5baa0be8e05668d549608d2b3cf1a7583176e919630289adfc64f158d",
+        "schema_version": 2,
+        "semantics_version": 1,
+        "source": "preset"
+      },
+      "result": {
+        "chance_nodes": 145,
+        "count_kind": "lower_bound",
+        "elapsed_seconds": 15.382588332984596,
+        "exact": false,
+        "information_set_actions": 10276,
+        "information_sets": 3420,
+        "max_actions_per_information_set": 8,
+        "max_seconds": 300.0,
+        "max_states": 10000,
+        "parameters": {
+          "action_space_mode": "compact",
+          "board_side": "standard",
+          "deluxe_investors": false,
+          "investor_mode": "none",
+          "player_count": 2,
+          "round_count": 6,
+          "rule_overrides": {},
+          "rules_profile": "lite"
+        },
+        "per_player_information_set_actions": {
+          "0": 9584,
+          "1": 692
+        },
+        "per_player_information_sets": {
+          "0": 3186,
+          "1": 234
+        },
+        "states_visited": 10000,
+        "terminal_states": 6435,
+        "truncation_reason": "max_states"
+      },
+      "semantic_rules": {
+        "action_codec_ranges": [
+          {
+            "namespace": "card_slot",
+            "start": 0,
+            "step": 1,
+            "stop": 2
+          },
+          {
+            "namespace": "pile",
+            "start": 2,
+            "step": 1,
+            "stop": 6
+          },
+          {
+            "namespace": "bid_level",
+            "start": 6,
+            "step": 1,
+            "stop": 14
+          },
+          {
+            "namespace": "done",
+            "start": 14,
+            "step": 1,
+            "stop": 15
+          },
+          {
+            "namespace": "sale_mode",
+            "start": 15,
+            "step": 1,
+            "stop": 18
+          }
+        ],
+        "advanced_price_tracks": false,
+        "advanced_track_dividends": false,
+        "bankruptcy": true,
+        "bid_values": [
+          0,
+          1,
+          3,
+          6,
+          10,
+          15,
+          20,
+          25
+        ],
+        "blind_information_pairs": true,
+        "company_count": 6,
+        "company_names": [
+          "Cosmic Computers",
+          "Bottomline Bank",
+          "Leading Laboratories",
+          "American Automotive",
+          "Stanford Steel",
+          "Epic Electric"
+        ],
+        "dividend_reveal_choice": false,
+        "enabled_investors": [],
+        "forecast_dividends": false,
+        "forecast_values": [
+          4,
+          2,
+          1,
+          0,
+          -2,
+          -3
+        ],
+        "investors": false,
+        "majority_bonus": false,
+        "market_action_cards": false,
+        "max_chance_outcomes": 6,
+        "max_game_length": 1392,
+        "max_legal_actions": 8,
+        "meeples_per_player": 2,
+        "partial_sales": true,
+        "player_count": 2,
+        "private_pairs_per_player": 2,
+        "repeat_split_bonus": false,
+        "round_count": 6,
+        "semantic_payload_version": 1,
+        "starting_cash": 30,
+        "starting_price": 5,
+        "starting_shares_per_player": 0,
+        "stock_boom_cards": false,
+        "stock_bust_cards": false,
+        "stock_splits": false,
+        "stockpile_count": 4,
+        "supply_batches": 2,
+        "trading_fees": false,
+        "two_player_topology": "official"
+      }
+    },
+    "b975c6d618f53b36480d004ed675370a4b4f22386a4b6788198e4cbb5b19fbbe": {
+      "fingerprint": "b975c6d618f53b36480d004ed675370a4b4f22386a4b6788198e4cbb5b19fbbe",
+      "provenance": {
+        "generated_at": "2026-08-15T16:05:05.035731Z",
+        "platform_digest": "ac2c48a5baa0be8e05668d549608d2b3cf1a7583176e919630289adfc64f158d",
+        "schema_version": 2,
+        "semantics_version": 1,
+        "source": "preset"
+      },
+      "result": {
+        "chance_nodes": 168,
+        "count_kind": "lower_bound",
+        "elapsed_seconds": 29.086365167051554,
+        "exact": false,
+        "information_set_actions": 10761,
+        "information_sets": 3472,
+        "max_actions_per_information_set": 7,
+        "max_seconds": 300.0,
+        "max_states": 10000,
+        "parameters": {
+          "action_space_mode": "compact",
+          "board_side": "advanced",
+          "deluxe_investors": false,
+          "investor_mode": "none",
+          "player_count": 5,
+          "round_count": 6,
+          "rule_overrides": {},
+          "rules_profile": "deluxe"
+        },
+        "per_player_information_set_actions": {
+          "0": 225,
+          "1": 226,
+          "2": 203,
+          "3": 356,
+          "4": 9751
+        },
+        "per_player_information_sets": {
+          "0": 65,
+          "1": 69,
+          "2": 63,
+          "3": 91,
+          "4": 3184
+        },
+        "states_visited": 10000,
+        "terminal_states": 6360,
+        "truncation_reason": "max_states"
+      },
+      "semantic_rules": {
+        "action_codec_ranges": [
+          {
+            "namespace": "card_slot",
+            "start": 0,
+            "step": 1,
+            "stop": 2
+          },
+          {
+            "namespace": "pile",
+            "start": 2,
+            "step": 1,
+            "stop": 7
+          },
+          {
+            "namespace": "bid_level",
+            "start": 7,
+            "step": 1,
+            "stop": 15
+          },
+          {
+            "namespace": "company",
+            "start": 15,
+            "step": 1,
+            "stop": 21
+          },
+          {
+            "namespace": "done",
+            "start": 21,
+            "step": 1,
+            "stop": 22
+          },
+          {
+            "namespace": "direction",
+            "start": 22,
+            "step": 1,
+            "stop": 24
+          },
+          {
+            "namespace": "sale_mode",
+            "start": 24,
+            "step": 1,
+            "stop": 27
+          },
+          {
+            "namespace": "dividend_claim",
+            "start": 27,
+            "step": 1,
+            "stop": 29
+          }
+        ],
+        "advanced_price_tracks": true,
+        "advanced_track_dividends": true,
+        "bankruptcy": true,
+        "bid_values": [
+          0,
+          1,
+          3,
+          6,
+          10,
+          15,
+          20,
+          25
+        ],
+        "blind_information_pairs": true,
+        "company_count": 6,
+        "company_names": [
+          "Cosmic Computers",
+          "Bottomline Bank",
+          "Leading Laboratories",
+          "American Automotive",
+          "Stanford Steel",
+          "Epic Electric"
+        ],
+        "dividend_reveal_choice": true,
+        "enabled_investors": [],
+        "forecast_dividends": true,
+        "forecast_values": [
+          4,
+          2,
+          1,
+          "DIVIDEND",
+          -2,
+          -3
+        ],
+        "investors": false,
+        "majority_bonus": true,
+        "market_action_cards": true,
+        "max_chance_outcomes": 11,
+        "max_game_length": 2040,
+        "max_legal_actions": 8,
+        "meeples_per_player": 1,
+        "partial_sales": true,
+        "player_count": 5,
+        "private_pairs_per_player": 1,
+        "repeat_split_bonus": true,
+        "round_count": 6,
+        "semantic_payload_version": 1,
+        "starting_cash": 20,
+        "starting_price": 5,
+        "starting_shares_per_player": 1,
+        "stock_boom_cards": true,
+        "stock_bust_cards": true,
+        "stock_splits": true,
+        "stockpile_count": 5,
+        "supply_batches": 1,
+        "trading_fees": true,
+        "two_player_topology": "standard"
+      }
+    },
+    "c1256cab55ded839a59dc659621ed641fa23b94ca8402583d3cef3ac0810737b": {
+      "fingerprint": "c1256cab55ded839a59dc659621ed641fa23b94ca8402583d3cef3ac0810737b",
+      "provenance": {
+        "generated_at": "2026-08-15T16:05:20.945093Z",
+        "platform_digest": "ac2c48a5baa0be8e05668d549608d2b3cf1a7583176e919630289adfc64f158d",
+        "schema_version": 2,
+        "semantics_version": 1,
+        "source": "preset"
+      },
+      "result": {
+        "chance_nodes": 136,
+        "count_kind": "lower_bound",
+        "elapsed_seconds": 15.887902375077829,
+        "exact": false,
+        "information_set_actions": 10198,
+        "information_sets": 3369,
+        "max_actions_per_information_set": 8,
+        "max_seconds": 300.0,
+        "max_states": 10000,
+        "parameters": {
+          "action_space_mode": "compact",
+          "board_side": "advanced",
+          "deluxe_investors": true,
+          "investor_mode": "none",
+          "player_count": 3,
+          "round_count": 6,
+          "rule_overrides": {},
+          "rules_profile": "deluxe"
+        },
+        "per_player_information_set_actions": {
+          "0": 202,
+          "1": 9819,
+          "2": 177
+        },
+        "per_player_information_sets": {
+          "0": 71,
+          "1": 3228,
+          "2": 70
+        },
+        "states_visited": 10000,
+        "terminal_states": 6495,
+        "truncation_reason": "max_states"
+      },
+      "semantic_rules": {
+        "action_codec_ranges": [
+          {
+            "namespace": "card_ordinal",
+            "start": 0,
+            "step": 1,
+            "stop": 4
+          },
+          {
+            "namespace": "pile",
+            "start": 4,
+            "step": 1,
+            "stop": 7
+          },
+          {
+            "namespace": "bid_level",
+            "start": 7,
+            "step": 1,
+            "stop": 15
+          },
+          {
+            "namespace": "company",
+            "start": 15,
+            "step": 1,
+            "stop": 21
+          },
+          {
+            "namespace": "done",
+            "start": 21,
+            "step": 1,
+            "stop": 22
+          },
+          {
+            "namespace": "direction",
+            "start": 22,
+            "step": 1,
+            "stop": 24
+          },
+          {
+            "namespace": "sale_mode",
+            "start": 24,
+            "step": 1,
+            "stop": 27
+          },
+          {
+            "namespace": "dividend_claim",
+            "start": 27,
+            "step": 1,
+            "stop": 29
+          },
+          {
+            "namespace": "use_ability",
+            "start": 29,
+            "step": 1,
+            "stop": 30
+          },
+          {
+            "namespace": "investor_slot",
+            "start": 30,
+            "step": 1,
+            "stop": 30
+          },
+          {
+            "namespace": "card_face",
+            "start": 30,
+            "step": 1,
+            "stop": 32
+          },
+          {
+            "namespace": "info_target",
+            "start": 32,
+            "step": 1,
+            "stop": 36
+          }
+        ],
+        "advanced_price_tracks": true,
+        "advanced_track_dividends": true,
+        "bankruptcy": true,
+        "bid_values": [
+          0,
+          1,
+          3,
+          6,
+          10,
+          15,
+          20,
+          25
+        ],
+        "blind_information_pairs": true,
+        "company_count": 6,
+        "company_names": [
+          "Cosmic Computers",
+          "Bottomline Bank",
+          "Leading Laboratories",
+          "American Automotive",
+          "Stanford Steel",
+          "Epic Electric"
+        ],
+        "dividend_reveal_choice": true,
+        "enabled_investors": [
+          "bill",
+          "broker_bernie",
+          "crazy_cramer",
+          "discount_donald",
+          "dividend_deborah",
+          "golden_graham",
+          "mayknow_martha",
+          "maverick_mark",
+          "secretive_stuart",
+          "wise_warren"
+        ],
+        "forecast_dividends": true,
+        "forecast_values": [
+          4,
+          2,
+          1,
+          "DIVIDEND",
+          -2,
+          -3
+        ],
+        "investors": true,
+        "majority_bonus": true,
+        "market_action_cards": true,
+        "max_chance_outcomes": 11,
+        "max_game_length": 1320,
+        "max_legal_actions": 8,
+        "meeples_per_player": 1,
+        "partial_sales": true,
+        "player_count": 3,
+        "private_pairs_per_player": 1,
+        "repeat_split_bonus": true,
+        "round_count": 6,
+        "semantic_payload_version": 1,
+        "starting_cash": 20,
+        "starting_price": 5,
+        "starting_shares_per_player": 1,
+        "stock_boom_cards": true,
+        "stock_bust_cards": true,
+        "stock_splits": true,
+        "stockpile_count": 3,
+        "supply_batches": 1,
+        "trading_fees": true,
+        "two_player_topology": "standard"
+      }
+    },
+    "c4714a5d87303354752ff1fe85b37ef5b9d2ae6c0a21c0738241db6ffdd76a22": {
+      "fingerprint": "c4714a5d87303354752ff1fe85b37ef5b9d2ae6c0a21c0738241db6ffdd76a22",
+      "provenance": {
+        "generated_at": "2026-08-15T16:02:39.899440Z",
+        "platform_digest": "ac2c48a5baa0be8e05668d549608d2b3cf1a7583176e919630289adfc64f158d",
+        "schema_version": 2,
+        "semantics_version": 1,
+        "source": "preset"
+      },
+      "result": {
+        "chance_nodes": 145,
+        "count_kind": "lower_bound",
+        "elapsed_seconds": 15.221141583984718,
+        "exact": false,
+        "information_set_actions": 10266,
+        "information_sets": 3416,
+        "max_actions_per_information_set": 7,
+        "max_seconds": 300.0,
+        "max_states": 10000,
+        "parameters": {
+          "action_space_mode": "compact",
+          "board_side": "standard",
+          "deluxe_investors": false,
+          "investor_mode": "none",
+          "player_count": 4,
+          "round_count": 6,
+          "rule_overrides": {},
+          "rules_profile": "lite"
+        },
+        "per_player_information_set_actions": {
+          "0": 8742,
+          "1": 218,
+          "2": 222,
+          "3": 1084
+        },
+        "per_player_information_sets": {
+          "0": 2915,
+          "1": 62,
+          "2": 76,
+          "3": 363
+        },
+        "states_visited": 10000,
+        "terminal_states": 6439,
+        "truncation_reason": "max_states"
+      },
+      "semantic_rules": {
+        "action_codec_ranges": [
+          {
+            "namespace": "card_slot",
+            "start": 0,
+            "step": 1,
+            "stop": 2
+          },
+          {
+            "namespace": "pile",
+            "start": 2,
+            "step": 1,
+            "stop": 6
+          },
+          {
+            "namespace": "bid_level",
+            "start": 6,
+            "step": 1,
+            "stop": 14
+          },
+          {
+            "namespace": "done",
+            "start": 14,
+            "step": 1,
+            "stop": 15
+          },
+          {
+            "namespace": "sale_mode",
+            "start": 15,
+            "step": 1,
+            "stop": 18
+          }
+        ],
+        "advanced_price_tracks": false,
+        "advanced_track_dividends": false,
+        "bankruptcy": true,
+        "bid_values": [
+          0,
+          1,
+          3,
+          6,
+          10,
+          15,
+          20,
+          25
+        ],
+        "blind_information_pairs": true,
+        "company_count": 6,
+        "company_names": [
+          "Cosmic Computers",
+          "Bottomline Bank",
+          "Leading Laboratories",
+          "American Automotive",
+          "Stanford Steel",
+          "Epic Electric"
+        ],
+        "dividend_reveal_choice": false,
+        "enabled_investors": [],
+        "forecast_dividends": false,
+        "forecast_values": [
+          4,
+          2,
+          1,
+          0,
+          -2,
+          -3
+        ],
+        "investors": false,
+        "majority_bonus": false,
+        "market_action_cards": false,
+        "max_chance_outcomes": 6,
+        "max_game_length": 1680,
+        "max_legal_actions": 8,
+        "meeples_per_player": 1,
+        "partial_sales": true,
+        "player_count": 4,
+        "private_pairs_per_player": 1,
+        "repeat_split_bonus": false,
+        "round_count": 6,
+        "semantic_payload_version": 1,
+        "starting_cash": 20,
+        "starting_price": 5,
+        "starting_shares_per_player": 0,
+        "stock_boom_cards": false,
+        "stock_bust_cards": false,
+        "stock_splits": false,
+        "stockpile_count": 4,
+        "supply_batches": 1,
+        "trading_fees": false,
+        "two_player_topology": "standard"
+      }
+    },
+    "e1a2b7845efe9b8abff4a5d8e24125bc92e9d803a0ac701e86adcbcdce26c31c": {
+      "fingerprint": "e1a2b7845efe9b8abff4a5d8e24125bc92e9d803a0ac701e86adcbcdce26c31c",
+      "provenance": {
+        "generated_at": "2026-08-15T16:04:12.064705Z",
+        "platform_digest": "ac2c48a5baa0be8e05668d549608d2b3cf1a7583176e919630289adfc64f158d",
+        "schema_version": 2,
+        "semantics_version": 1,
+        "source": "preset"
+      },
+      "result": {
+        "chance_nodes": 130,
+        "count_kind": "lower_bound",
+        "elapsed_seconds": 14.767580084037036,
+        "exact": false,
+        "information_set_actions": 10179,
+        "information_sets": 3402,
+        "max_actions_per_information_set": 7,
+        "max_seconds": 300.0,
+        "max_states": 10000,
+        "parameters": {
+          "action_space_mode": "compact",
+          "board_side": "advanced",
+          "deluxe_investors": false,
+          "investor_mode": "none",
+          "player_count": 3,
+          "round_count": 6,
+          "rule_overrides": {},
+          "rules_profile": "deluxe"
+        },
+        "per_player_information_set_actions": {
+          "0": 365,
+          "1": 9626,
+          "2": 188
+        },
+        "per_player_information_sets": {
+          "0": 126,
+          "1": 3217,
+          "2": 59
+        },
+        "states_visited": 10000,
+        "terminal_states": 6468,
+        "truncation_reason": "max_states"
+      },
+      "semantic_rules": {
+        "action_codec_ranges": [
+          {
+            "namespace": "card_slot",
+            "start": 0,
+            "step": 1,
+            "stop": 2
+          },
+          {
+            "namespace": "pile",
+            "start": 2,
+            "step": 1,
+            "stop": 5
+          },
+          {
+            "namespace": "bid_level",
+            "start": 5,
+            "step": 1,
+            "stop": 13
+          },
+          {
+            "namespace": "company",
+            "start": 13,
+            "step": 1,
+            "stop": 19
+          },
+          {
+            "namespace": "done",
+            "start": 19,
+            "step": 1,
+            "stop": 20
+          },
+          {
+            "namespace": "direction",
+            "start": 20,
+            "step": 1,
+            "stop": 22
+          },
+          {
+            "namespace": "sale_mode",
+            "start": 22,
+            "step": 1,
+            "stop": 25
+          },
+          {
+            "namespace": "dividend_claim",
+            "start": 25,
+            "step": 1,
+            "stop": 27
+          }
+        ],
+        "advanced_price_tracks": true,
+        "advanced_track_dividends": true,
+        "bankruptcy": true,
+        "bid_values": [
+          0,
+          1,
+          3,
+          6,
+          10,
+          15,
+          20,
+          25
+        ],
+        "blind_information_pairs": true,
+        "company_count": 6,
+        "company_names": [
+          "Cosmic Computers",
+          "Bottomline Bank",
+          "Leading Laboratories",
+          "American Automotive",
+          "Stanford Steel",
+          "Epic Electric"
+        ],
+        "dividend_reveal_choice": true,
+        "enabled_investors": [],
+        "forecast_dividends": true,
+        "forecast_values": [
+          4,
+          2,
+          1,
+          "DIVIDEND",
+          -2,
+          -3
+        ],
+        "investors": false,
+        "majority_bonus": true,
+        "market_action_cards": true,
+        "max_chance_outcomes": 11,
+        "max_game_length": 1320,
+        "max_legal_actions": 8,
+        "meeples_per_player": 1,
+        "partial_sales": true,
+        "player_count": 3,
+        "private_pairs_per_player": 1,
+        "repeat_split_bonus": true,
+        "round_count": 6,
+        "semantic_payload_version": 1,
+        "starting_cash": 20,
+        "starting_price": 5,
+        "starting_shares_per_player": 1,
+        "stock_boom_cards": true,
+        "stock_bust_cards": true,
+        "stock_splits": true,
+        "stockpile_count": 3,
+        "supply_batches": 1,
+        "trading_fees": true,
+        "two_player_topology": "standard"
+      }
+    },
+    "fc93974470a2477c0185dcc38a6e3514e7115b91d87cf385ca5987f4bc408172": {
+      "fingerprint": "fc93974470a2477c0185dcc38a6e3514e7115b91d87cf385ca5987f4bc408172",
+      "provenance": {
+        "generated_at": "2026-08-15T16:02:24.661959Z",
+        "platform_digest": "ac2c48a5baa0be8e05668d549608d2b3cf1a7583176e919630289adfc64f158d",
+        "schema_version": 2,
+        "semantics_version": 1,
+        "source": "preset"
+      },
+      "result": {
+        "chance_nodes": 127,
+        "count_kind": "lower_bound",
+        "elapsed_seconds": 11.326848958036862,
+        "exact": false,
+        "information_set_actions": 10145,
+        "information_sets": 3394,
+        "max_actions_per_information_set": 7,
+        "max_seconds": 300.0,
+        "max_states": 10000,
+        "parameters": {
+          "action_space_mode": "compact",
+          "board_side": "standard",
+          "deluxe_investors": false,
+          "investor_mode": "none",
+          "player_count": 3,
+          "round_count": 6,
+          "rule_overrides": {},
+          "rules_profile": "lite"
+        },
+        "per_player_information_set_actions": {
+          "0": 324,
+          "1": 9634,
+          "2": 187
+        },
+        "per_player_information_sets": {
+          "0": 115,
+          "1": 3220,
+          "2": 59
+        },
+        "states_visited": 10000,
+        "terminal_states": 6479,
+        "truncation_reason": "max_states"
+      },
+      "semantic_rules": {
+        "action_codec_ranges": [
+          {
+            "namespace": "card_slot",
+            "start": 0,
+            "step": 1,
+            "stop": 2
+          },
+          {
+            "namespace": "pile",
+            "start": 2,
+            "step": 1,
+            "stop": 5
+          },
+          {
+            "namespace": "bid_level",
+            "start": 5,
+            "step": 1,
+            "stop": 13
+          },
+          {
+            "namespace": "done",
+            "start": 13,
+            "step": 1,
+            "stop": 14
+          },
+          {
+            "namespace": "sale_mode",
+            "start": 14,
+            "step": 1,
+            "stop": 17
+          }
+        ],
+        "advanced_price_tracks": false,
+        "advanced_track_dividends": false,
+        "bankruptcy": true,
+        "bid_values": [
+          0,
+          1,
+          3,
+          6,
+          10,
+          15,
+          20,
+          25
+        ],
+        "blind_information_pairs": true,
+        "company_count": 6,
+        "company_names": [
+          "Cosmic Computers",
+          "Bottomline Bank",
+          "Leading Laboratories",
+          "American Automotive",
+          "Stanford Steel",
+          "Epic Electric"
+        ],
+        "dividend_reveal_choice": false,
+        "enabled_investors": [],
+        "forecast_dividends": false,
+        "forecast_values": [
+          4,
+          2,
+          1,
+          0,
+          -2,
+          -3
+        ],
+        "investors": false,
+        "majority_bonus": false,
+        "market_action_cards": false,
+        "max_chance_outcomes": 6,
+        "max_game_length": 1320,
+        "max_legal_actions": 8,
+        "meeples_per_player": 1,
+        "partial_sales": true,
+        "player_count": 3,
+        "private_pairs_per_player": 1,
+        "repeat_split_bonus": false,
+        "round_count": 6,
+        "semantic_payload_version": 1,
+        "starting_cash": 20,
+        "starting_price": 5,
+        "starting_shares_per_player": 0,
+        "stock_boom_cards": false,
+        "stock_bust_cards": false,
+        "stock_splits": false,
+        "stockpile_count": 3,
+        "supply_batches": 1,
+        "trading_fees": false,
+        "two_player_topology": "standard"
+      }
+    }
+  },
+  "platform_digest": "ac2c48a5baa0be8e05668d549608d2b3cf1a7583176e919630289adfc64f158d",
+  "schema_version": 2,
+  "semantics_version": 1
+}
