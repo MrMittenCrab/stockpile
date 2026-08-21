@@ -27,6 +27,13 @@ __pycache__/
 /coverage.xml
 /htmlcov/
 
+# Frontend dependencies, builds, and browser-test output
+/frontend/node_modules/
+/frontend/dist/
+/frontend/coverage/
+/frontend/playwright-report/
+/frontend/test-results/
+
 # Local environment variables and secrets
 /.env
 /.env.*

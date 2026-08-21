@@ -83,6 +83,32 @@ class ActionCatalogTests(unittest.TestCase):
                         42 if profile == "deluxe" else 29,
                     )
 
+    def test_lite_market_impact_catalog_and_shared_padding_are_exact(self):
+        expected_compact = {2: 26, 3: 25, 4: 26, 5: 27}
+        for players, expected in expected_compact.items():
+            with self.subTest(players=players):
+                compact = _configured(
+                    "lite",
+                    players,
+                    rule_overrides={"impact": True},
+                )
+                shared = _configured(
+                    "lite",
+                    players,
+                    rule_overrides={"impact": True},
+                    action_space_mode="shared",
+                )
+                self.assertEqual(
+                    compact.rule_set.action_codec.num_distinct_actions,
+                    expected,
+                )
+                self.assertEqual(compact.game.num_distinct_actions(), expected)
+                self.assertEqual(shared.game.num_distinct_actions(), 29)
+                self.assertEqual(
+                    stockpile.complexity_report(compact)["max_chance_outcomes"],
+                    8,
+                )
+
     def test_catalog_namespaces_follow_effective_mechanics(self):
         lite = _configured("lite", 2).rule_set.action_codec
         classic = _configured("classic", 2).rule_set.action_codec
@@ -97,6 +123,15 @@ class ActionCatalogTests(unittest.TestCase):
         self.assertIn("use_ability", deluxe.ranges)
         self.assertIn("use_ability", investors.ranges)
         self.assertIn("investor_slot", investors.ranges)
+
+        impact_lite = _configured(
+            "lite",
+            2,
+            rule_overrides={"impact": True},
+        ).rule_set.action_codec
+        self.assertIn("company", impact_lite.ranges)
+        self.assertIn("direction", impact_lite.ranges)
+        self.assertNotIn("dividend_claim", impact_lite.ranges)
 
         dividend_lite = stockpile.create_configuration(
             "lite",
@@ -128,11 +163,16 @@ class ActionCatalogTests(unittest.TestCase):
             )
 
     def test_reported_chance_maxima_and_reachable_bid_branch(self):
-        cases = (("lite", 6), ("classic", 11), ("deluxe", 11))
-        for profile, expected in cases:
+        cases = (
+            ("lite", None, 6),
+            ("lite", {"impact": True}, 8),
+            ("classic", None, 11),
+            ("deluxe", None, 11),
+        )
+        for profile, overrides, expected in cases:
             with self.subTest(profile=profile):
                 report = stockpile.complexity_report(
-                    _parameters(profile, 3)
+                    _parameters(profile, 3, rule_overrides=overrides)
                 )
                 self.assertEqual(report["max_chance_outcomes"], expected)
 
@@ -158,8 +198,7 @@ class CompatibilityAndSerializationTests(unittest.TestCase):
                 "starting_share",
                 "trading_fees",
                 "dividends",
-                "stock_splits",
-                "majority_bonus",
+                "market_impact",
             ),
         )
 

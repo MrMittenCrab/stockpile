@@ -10,11 +10,14 @@ Lite game with sealed selling and the compact 18-action head.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import random
 import sys
+import tempfile
 import time
 from typing import Any, TextIO
 
@@ -34,6 +37,13 @@ from .policy import (
     DeepCFRPolicy,
     torch_batch,
 )
+from .regret import (
+    REGRET_SIDECAR_SCHEMA_VERSION,
+    RegretIterationCapture,
+    RegretSidecarArchive,
+    RegretTraversalCapture,
+    TraversalRegretRecord,
+)
 from .sampling import (
     OutcomeSamplingReach,
     exploration_policy,
@@ -45,7 +55,9 @@ from .sampling import (
 )
 
 
-CHECKPOINT_SCHEMA_VERSION = 1
+LEGACY_CHECKPOINT_SCHEMA_VERSION = 1
+CHECKPOINT_SCHEMA_VERSION = 2
+_RESUME_RECOVERY_SCHEMA_VERSION = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +91,7 @@ class _TraversalTelemetry:
     root_value: float
     absolute_regret_targets: tuple[float, ...]
     strategy_log_importance_weights: tuple[float, ...]
+    signed_regret_record: TraversalRegretRecord
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,6 +236,8 @@ class DeepCFRTrainer:
         self.stage_evaluated = False
         self.metrics: list[dict[str, Any]] = []
         self._resume_loaded = False
+        self._loaded_checkpoint_path: Path | None = None
+        self.regret_archive = RegretSidecarArchive(config.output_dir)
 
     @staticmethod
     def _validate_configuration(
@@ -242,6 +257,7 @@ class DeepCFRTrainer:
         enabled = [
             name
             for name in (
+                "impact",
                 "hand",
                 "fees",
                 "dividend",
@@ -259,6 +275,8 @@ class DeepCFRTrainer:
             )
         if configuration.game.num_distinct_actions() != 18:
             raise ValueError("Deep CFR requires a shape-stable 18-action head")
+        if configuration.rule_set.standard_price_ceiling is not None:
+            raise ValueError("Deep CFR requires uncapped Lite price semantics")
 
     def _stage_game(self, round_count: int) -> interface.GameConfig:
         configuration = interface.resolve_configuration(
@@ -342,7 +360,11 @@ class DeepCFRTrainer:
         action, probability = outcomes[-1]
         return action, probability / total
 
-    def _traverse(self, update_player: int) -> _TraversalTelemetry:
+    def _traverse(
+        self,
+        update_player: int,
+        traversal_ordinal: int = 0,
+    ) -> _TraversalTelemetry:
         assert self.stage_configuration is not None
         assert self.strategy_memory is not None
         game = self.stage_configuration.game
@@ -352,6 +374,10 @@ class DeepCFRTrainer:
         nodes: list[_TrajectoryNode] = []
         absolute_regret_targets: list[float] = []
         strategy_log_weights: list[float] = []
+        signed_regret = RegretTraversalCapture(
+            player_id=update_player,
+            traversal_ordinal=traversal_ordinal,
+        )
 
         while not state.is_terminal():
             if state.is_chance_node():
@@ -425,6 +451,11 @@ class DeepCFRTrainer:
             legal_target = target[np.asarray(node.information.legal_mask)]
             if not np.all(np.isfinite(legal_target)):
                 raise FloatingPointError("outcome-sampling regret target is nonfinite")
+            signed_regret.add_target(
+                perfect_recall_id=node.information.perfect_recall_id,
+                legal_mask=node.information.legal_mask,
+                target=target,
+            )
             absolute_regret_targets.extend(
                 float(abs(value)) for value in legal_target
             )
@@ -458,6 +489,7 @@ class DeepCFRTrainer:
             root_value=child_value,
             absolute_regret_targets=tuple(absolute_regret_targets),
             strategy_log_importance_weights=tuple(strategy_log_weights),
+            signed_regret_record=signed_regret.finish(),
         )
 
     def _learn_advantages(self, player: int) -> _OptimizationTelemetry | None:
@@ -601,6 +633,7 @@ class DeepCFRTrainer:
             "rounds": self.stage_configuration.round_count,
             "players": 2,
             "mode": "lite",
+            "market_impact": self.stage_configuration.impact,
             "sell_order": False,
             "action_space_mode": "compact",
             "action_count": self.config.network.action_count,
@@ -614,8 +647,16 @@ class DeepCFRTrainer:
             "semantic_fingerprint": complexity_cache.semantic_fingerprint(
                 self.stage_configuration.configured_game
             ),
+            "price_semantics": {
+                "standard_price_ceiling": (
+                    self.stage_configuration.rule_set.standard_price_ceiling
+                ),
+            },
             "equilibrium_claim": False,
             "resolved_device": str(self.device),
+            "sampled_regret_sidecar_schema_version": (
+                REGRET_SIDECAR_SCHEMA_VERSION
+            ),
         }
 
     def _training_signature(self) -> dict[str, Any]:
@@ -664,6 +705,9 @@ class DeepCFRTrainer:
                 if torch.backends.mps.is_available()
                 else None
             ),
+            "sampled_regret_telemetry": self.regret_archive.checkpoint_state(
+                embed_records=True
+            ),
             "metrics": self.metrics,
         }
 
@@ -696,25 +740,34 @@ class DeepCFRTrainer:
     def load_checkpoint(self, path: str | Path) -> None:
         """Restore an exact same-stage run, including memories and RNGs."""
 
-        payload = torch.load(Path(path), map_location=self.device, weights_only=False)
+        checkpoint_path = Path(path).expanduser().resolve(strict=False)
+        payload = torch.load(
+            checkpoint_path,
+            map_location=self.device,
+            weights_only=False,
+        )
         if payload.get("kind") != "stockpile_deep_cfr_training":
             raise ValueError("not a Stockpile Deep CFR training checkpoint")
-        if payload.get("schema_version") != CHECKPOINT_SCHEMA_VERSION:
+        checkpoint_schema = payload.get("schema_version")
+        if checkpoint_schema not in {
+            LEGACY_CHECKPOINT_SCHEMA_VERSION,
+            CHECKPOINT_SCHEMA_VERSION,
+        }:
             raise ValueError("unsupported Deep CFR checkpoint schema")
         if payload.get("training_signature") != self._training_signature():
             raise ValueError("checkpoint training configuration does not match")
         stage_index = int(payload["stage_index"])
         if not 0 <= stage_index < len(self.config.curriculum.rounds):
             raise ValueError("checkpoint curriculum stage is out of range")
-        self._reset_stage(stage_index, transfer_weights=False)
-        assert self.stage_configuration is not None
-        if payload.get("metadata", {}).get("semantic_fingerprint") != (
-            complexity_cache.semantic_fingerprint(
-                self.stage_configuration.configured_game
-            )
-        ):
-            raise ValueError("checkpoint game semantics do not match")
+        stage_configuration = self._stage_game(
+            self.config.curriculum.rounds[stage_index]
+        )
         checkpoint_metadata = payload.get("metadata", {})
+        expected_fingerprint = complexity_cache.semantic_fingerprint(
+            stage_configuration.configured_game
+        )
+        if checkpoint_metadata.get("semantic_fingerprint") != expected_fingerprint:
+            raise ValueError("checkpoint game semantics do not match")
         if checkpoint_metadata.get("encoder_schema_version") != (
             ENCODING_SCHEMA_VERSION
         ):
@@ -727,6 +780,14 @@ class DeepCFRTrainer:
             raise ValueError("checkpoint resolved device does not match")
         if len(payload["advantage_networks"]) != 2:
             raise ValueError("checkpoint must contain two advantage networks")
+        regret_state = payload.get("sampled_regret_telemetry")
+        if checkpoint_schema == CHECKPOINT_SCHEMA_VERSION:
+            if regret_state is None:
+                raise ValueError("checkpoint is missing sampled regret telemetry")
+            self.regret_archive.validate_checkpoint_state(regret_state)
+
+        self._reset_stage(stage_index, transfer_weights=False)
+        assert self.stage_configuration is not None
         for network, state in zip(
             self.advantage_networks,
             payload["advantage_networks"],
@@ -765,31 +826,120 @@ class DeepCFRTrainer:
         mps_state = payload.get("torch_mps_rng_state")
         if mps_state is not None and torch.backends.mps.is_available():
             torch.mps.set_rng_state(mps_state.to("cpu"))
-        self._rewrite_metrics_file()
+        if regret_state is not None:
+            self.regret_archive.restore_checkpoint_state(regret_state)
+        self._rewrite_metrics_file(preserve_existing=True)
         self._resume_loaded = True
+        self._loaded_checkpoint_path = checkpoint_path
 
-    def _write_run_config(self) -> None:
-        self.config.output_dir.mkdir(parents=True, exist_ok=True)
-        path = self.config.output_dir / "config.json"
-        path.write_text(
+    @staticmethod
+    def _write_recovery_file(path: Path, content: bytes) -> None:
+        """Create one immutable recovery file, accepting an identical retry."""
+
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=path.parent,
+        )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            try:
+                os.link(temporary, path)
+            except FileExistsError:
+                if not path.is_file() or path.read_bytes() != content:
+                    raise RuntimeError(
+                        "resume recovery archive conflicts with existing file: "
+                        f"{path}"
+                    )
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def _preserve_resume_reconciliation_input(
+        self,
+        path: Path,
+        replacement: bytes,
+    ) -> Path | None:
+        """Content-address differing bytes before resume reconciliation."""
+
+        if not path.is_file():
+            return None
+        existing = path.read_bytes()
+        if existing == replacement:
+            return None
+
+        digest = hashlib.sha256(existing).hexdigest()
+        recovery_dir = (
+            self.config.output_dir
+            / "recovery"
+            / "resume_reconciliation"
+            / path.name
+            / f"sha256-{digest}"
+        )
+        recovery_dir.mkdir(parents=True, exist_ok=True)
+        recovered_path = recovery_dir / path.name
+        self._write_recovery_file(recovered_path, existing)
+        provenance = {
+            "kind": "stockpile_deep_cfr_resume_recovery",
+            "schema_version": _RESUME_RECOVERY_SCHEMA_VERSION,
+            "reason": "resume_reconciliation",
+            "source_path": path.name,
+            "preserved_sha256": digest,
+            "preserved_byte_count": len(existing),
+        }
+        provenance_bytes = (
+            json.dumps(
+                provenance,
+                indent=2,
+                sort_keys=True,
+                allow_nan=False,
+            )
+            + "\n"
+        ).encode("utf-8")
+        self._write_recovery_file(recovery_dir / "provenance.json", provenance_bytes)
+        return recovered_path
+
+    def _render_run_config(self) -> bytes:
+        return (
             json.dumps(
                 {
+                    "sampled_regret_telemetry": {
+                        "record_schema_version": REGRET_SIDECAR_SCHEMA_VERSION,
+                    },
                     "training": _json_value(asdict(self.config)),
                     "base_game": {
                         "mode": "lite",
                         "players": 2,
                         "rounds": self.base_configuration.round_count,
+                        "market_impact": self.base_configuration.impact,
                         "sell_order": False,
                         "action_space_mode": "compact",
+                        "price_semantics": {
+                            "standard_price_ceiling": (
+                                self.base_configuration.rule_set.standard_price_ceiling
+                            ),
+                        },
                     },
                 },
                 indent=2,
                 sort_keys=True,
                 allow_nan=False,
             )
-            + "\n",
-            encoding="utf-8",
-        )
+            + "\n"
+        ).encode("utf-8")
+
+    def _write_run_config(self, *, preserve_existing: bool = False) -> None:
+        self.config.output_dir.mkdir(parents=True, exist_ok=True)
+        path = self.config.output_dir / "config.json"
+        rendered = self._render_run_config()
+        if preserve_existing:
+            self._preserve_resume_reconciliation_input(path, rendered)
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_bytes(rendered)
+        temporary.replace(path)
 
     def _append_metric(self, metric: dict[str, Any]) -> None:
         self.metrics.append(metric)
@@ -804,12 +954,8 @@ class DeepCFRTrainer:
                 + "\n"
             )
 
-    def _rewrite_metrics_file(self) -> None:
-        """Make the human-readable log an exact projection of checkpoint state."""
-
-        self.config.output_dir.mkdir(parents=True, exist_ok=True)
-        path = self.config.output_dir / "metrics.jsonl"
-        rendered = "".join(
+    def _render_metrics(self) -> bytes:
+        return "".join(
             json.dumps(
                 _json_value(metric),
                 sort_keys=True,
@@ -817,8 +963,19 @@ class DeepCFRTrainer:
             )
             + "\n"
             for metric in self.metrics
-        )
-        path.write_text(rendered, encoding="utf-8")
+        ).encode("utf-8")
+
+    def _rewrite_metrics_file(self, *, preserve_existing: bool = False) -> None:
+        """Make the human-readable log an exact projection of checkpoint state."""
+
+        self.config.output_dir.mkdir(parents=True, exist_ok=True)
+        path = self.config.output_dir / "metrics.jsonl"
+        rendered = self._render_metrics()
+        if preserve_existing:
+            self._preserve_resume_reconciliation_input(path, rendered)
+        temporary = path.with_suffix(".jsonl.tmp")
+        temporary.write_bytes(rendered)
+        temporary.replace(path)
 
     def train(
         self,
@@ -834,11 +991,16 @@ class DeepCFRTrainer:
                 raise ValueError(
                     f"output path is not a directory: {self.config.output_dir}"
                 )
-            if (
-                self.config.output_dir.exists()
-                and any(self.config.output_dir.iterdir())
-                and not overwrite
-            ):
+            existing = (
+                []
+                if not self.config.output_dir.exists()
+                else [
+                    entry
+                    for entry in self.config.output_dir.iterdir()
+                    if entry.name != "run.json"
+                ]
+            )
+            if existing and not overwrite:
                 raise ValueError(
                     f"output directory is not empty: {self.config.output_dir}; "
                     "choose another directory or enable overwrite"
@@ -849,10 +1011,30 @@ class DeepCFRTrainer:
         else:
             if overwrite:
                 raise ValueError("overwrite cannot be combined with resume")
-            self.load_checkpoint(resume)
+            checkpoint = Path(resume).expanduser().resolve(strict=False)
+            output_root = self.config.output_dir.expanduser().resolve(strict=False)
+            in_place_resume = checkpoint.is_relative_to(output_root)
+            if self._resume_loaded:
+                if self._loaded_checkpoint_path != checkpoint:
+                    raise ValueError(
+                        "preloaded resume checkpoint does not match requested path"
+                    )
+            else:
+                self.load_checkpoint(checkpoint)
+            # A preload is single-use.  A later train() call on this object
+            # must restore the requested checkpoint again rather than silently
+            # continuing mutated state from an earlier call.
+            self._resume_loaded = False
+            self._loaded_checkpoint_path = None
             # Do not touch run metadata until the checkpoint has passed all
-            # configuration, semantics, schema, and device validation.
-            self._write_run_config()
+            # configuration, semantics, schema, and device validation.  An
+            # in-place run's config is descriptive metadata, not checkpoint
+            # state; retain its exact bytes (including additive future fields)
+            # instead of regenerating it.  Forks need a destination config.
+            if not in_place_resume or not (
+                self.config.output_dir / "config.json"
+            ).is_file():
+                self._write_run_config(preserve_existing=True)
 
         completed: list[int] = list(
             self.config.curriculum.rounds[: self.stage_index]
@@ -873,12 +1055,27 @@ class DeepCFRTrainer:
                 self.stage_iteration += 1
                 self.global_iteration += 1
                 traversals: list[list[_TraversalTelemetry]] = [[], []]
+                regret_iteration = RegretIterationCapture(
+                    stage_index=stage_index,
+                    round_count=round_count,
+                    stage_iteration=self.stage_iteration,
+                    global_iteration=self.global_iteration,
+                    encoder_schema_version=ENCODING_SCHEMA_VERSION,
+                    action_count=self.config.network.action_count,
+                )
                 advantage_optimization: list[_OptimizationTelemetry | None] = []
                 for player in range(2):
-                    for _ in range(self.config.traversals_per_player):
-                        traversals[player].append(self._traverse(player))
+                    for traversal_ordinal in range(
+                        self.config.traversals_per_player
+                    ):
+                        traversal = self._traverse(player, traversal_ordinal)
+                        traversals[player].append(traversal)
+                        regret_iteration.add_traversal(
+                            traversal.signed_regret_record
+                        )
                     advantage_optimization.append(self._learn_advantages(player))
                 strategy_optimization = self._learn_strategy()
+                self.regret_archive.commit(regret_iteration.finish())
                 root_values = [
                     traversal.root_value
                     for player_traversals in traversals
@@ -1006,6 +1203,7 @@ __all__ = [
     "AdvantageSample",
     "CHECKPOINT_SCHEMA_VERSION",
     "DeepCFRTrainer",
+    "LEGACY_CHECKPOINT_SCHEMA_VERSION",
     "StrategySample",
     "TrainingResult",
 ]

@@ -1,13 +1,15 @@
 """Command-line entry point for the Stockpile platform.
 
-Parsing is intentionally isolated from configuration resolution.  Every
-subcommand receives the same resolved :class:`stockpile_interface.GameConfig`.
-Importing this module has no terminal side effects.
+Parsing is intentionally isolated from configuration resolution. Rules,
+complexity, and solve share the same resolved configuration; browser play
+lazily launches its own local setup API. Importing this module has no terminal
+side effects.
 """
 
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import math
 from pathlib import Path
 import sys
@@ -19,6 +21,7 @@ from . import stockpile_interface as interface
 
 _MODES = tuple(mode.value for mode in interface.ConfigurationMode)
 _OPTION_FLAGS = (
+    ("impact", "Market Impact cards and Action phase"),
     ("hand", "starting hand"),
     ("fees", "trading fees"),
     ("dividend", "dividends"),
@@ -100,6 +103,34 @@ def _exploration_float(value: str) -> float:
     return parsed
 
 
+def _confidence_float(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("confidence must be a number") from error
+    if not math.isfinite(parsed) or not 0 < parsed < 1:
+        raise argparse.ArgumentTypeError("confidence must be in (0, 1)")
+    return parsed
+
+
+def _loopback_host(value: str) -> str:
+    """Accept only loopback bind addresses for the ephemeral browser server."""
+
+    if value.casefold() == "localhost":
+        return "localhost"
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            "host must be localhost or a loopback IP address"
+        ) from error
+    if not address.is_loopback:
+        raise argparse.ArgumentTypeError(
+            "host must be localhost or a loopback IP address"
+        )
+    return value
+
+
 def _common_configuration_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--mode", required=True, choices=_MODES)
@@ -131,7 +162,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(
         prog="stockpile",
-        description="Configure and analyse Stockpile games.",
+        description="Configure, analyze, train, or locally play Stockpile games.",
     )
     commands = parser.add_subparsers(dest="command", title="commands")
     common = _common_configuration_parser()
@@ -167,11 +198,64 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="ignore remembered results and calculate a fresh result",
     )
-    commands.add_parser(
+    play_parser = commands.add_parser(
         "play",
-        parents=(common,),
-        help="play a game (not implemented)",
-        description="Play a resolved Stockpile game (not implemented).",
+        help="launch the local Stockpile Lite browser API",
+        description=(
+            "Launch the local-only Stockpile Lite browser API. "
+            "Games are configured in the browser."
+        ),
+    )
+    play_parser.add_argument("--mode", required=True, choices=("lite",))
+    play_parser.add_argument(
+        "--host",
+        type=_loopback_host,
+        default="127.0.0.1",
+        help="loopback interface to bind (default: 127.0.0.1)",
+    )
+    play_parser.add_argument(
+        "--port",
+        type=_bounded_integer("port", 1, 65_535),
+        default=8_000,
+        metavar="INT",
+        help="local API port (default: 8000)",
+    )
+    analyze_parser = commands.add_parser(
+        "analyze",
+        help="analyze sampled training regret",
+        description=(
+            "Analyze the sampled average regret recorded by one Deep CFR run. "
+            "Select the run either by its output directory or by mode and run number."
+        ),
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    analysis_source = analyze_parser.add_argument_group("source")
+    analysis_source.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="run artifact directory",
+    )
+    analysis_source.add_argument(
+        "--mode",
+        choices=_MODES,
+        default=None,
+        help="saved run mode (requires --run)",
+    )
+    analysis_source.add_argument(
+        "--run",
+        type=_named_positive_integer("run"),
+        default=None,
+        metavar="INT",
+        help="numbered saved run (requires --mode)",
+    )
+    analyze_parser.add_argument(
+        "--confidence",
+        type=_confidence_float,
+        default=0.90,
+        metavar="FLOAT",
+        help="empirical confidence level",
     )
     solve_parser = commands.add_parser(
         "solve",
@@ -284,32 +368,41 @@ def build_parser() -> argparse.ArgumentParser:
         default="auto",
         help="training device (auto selects CUDA, otherwise CPU; MPS is unsupported)",
     )
-    training.add_argument(
+    artifacts = solve_parser.add_argument_group("artifacts")
+    artifact_destination = artifacts.add_mutually_exclusive_group()
+    artifact_destination.add_argument(
         "--output-dir",
         type=Path,
         default=argparse.SUPPRESS,
         metavar="PATH",
         help=(
-            "artifact directory (default: artifacts/deep_cfr/smoke with "
-            "--smoke, otherwise artifacts/deep_cfr/default)"
+            "explicit unmanaged artifact directory (otherwise a numbered "
+            "managed run is reserved)"
         ),
     )
-    training.add_argument(
+    artifact_destination.add_argument(
+        "--run",
+        type=_named_positive_integer("run"),
+        default=None,
+        metavar="INT",
+        help="reserve or resume a specific numbered managed run",
+    )
+    artifacts.add_argument(
         "--resume",
         type=Path,
         default=None,
         metavar="CHECKPOINT",
         help="resume a same-stage full.pt checkpoint exactly",
     )
-    training.add_argument(
+    artifacts.add_argument(
         "--smoke",
         action="store_true",
         help=(
             "run the fixed, small one-round preset; other compute/device flags "
-            "are ignored (seed, output, resume, and overwrite still apply)"
+            "are ignored (seed, destination, resume, and overwrite still apply)"
         ),
     )
-    training.add_argument(
+    artifacts.add_argument(
         "--overwrite",
         action="store_true",
         help="allow a fresh run to replace artifacts in a nonempty output directory",
@@ -338,6 +431,7 @@ def resolve_arguments(arguments: argparse.Namespace) -> interface.GameConfig:
         stock_tracks=_optional_value(arguments.stock_tracks),
         sell_order=_optional_value(arguments.sell_order),
         action_space_mode="compact",
+        impact=_optional_value(arguments.impact),
     )
 
 
@@ -427,9 +521,136 @@ def complexity(
     return 0
 
 
-def play(configuration: interface.GameConfig, *, output: TextIO) -> int:
-    del configuration
-    print("Not implemented.", file=output)
+def play(*, mode: str, host: str, port: int, output: TextIO) -> int:
+    """Launch the optional web server without importing it for other commands."""
+
+    if mode != interface.ConfigurationMode.LITE.value:
+        raise ValueError("the browser interface supports only Stockpile Lite")
+    try:
+        from .web import run_server
+    except ModuleNotFoundError as error:
+        if error.name in {"fastapi", "uvicorn"}:
+            print(
+                "Browser play requires the optional web dependencies; "
+                "install requirements-web.txt.",
+                file=output,
+            )
+            return 2
+        raise
+    run_server(host=host, port=port)
+    return 0
+
+
+def _analysis_source(arguments: argparse.Namespace) -> Path:
+    """Resolve exactly one explicit analysis source without loading Torch."""
+
+    output_dir = arguments.output_dir
+    has_output = output_dir is not None
+    has_mode = arguments.mode is not None
+    has_run = arguments.run is not None
+    if has_output:
+        if has_mode or has_run:
+            raise ValueError(
+                "analyze requires exactly --output-dir or the pair --mode and --run"
+            )
+    elif not has_mode and not has_run:
+        raise ValueError(
+            "analyze requires exactly --output-dir or the pair --mode and --run"
+        )
+    elif has_mode != has_run:
+        raise ValueError("--mode and --run must be provided together for analyze")
+    if has_output:
+        path = Path(output_dir).expanduser().resolve(strict=False)
+        if not path.is_dir():
+            raise FileNotFoundError(f"run output directory does not exist: {path}")
+        return path
+
+    from .training.artifacts import resolve_run
+
+    return resolve_run(
+        arguments.mode,
+        run=arguments.run,
+        smoke=False,
+    ).path
+
+
+def _analysis_number(value: float | int | None) -> str:
+    if value is None:
+        return "N/A"
+    return format(float(value), ".12g")
+
+
+def analyze(*, arguments: argparse.Namespace, output: TextIO) -> int:
+    """Compute and persist the requested sampled-regret analysis report."""
+
+    run_dir = _analysis_source(arguments)
+
+    from .training.regret import analyze_run, write_analysis_report
+
+    report = analyze_run(
+        run_dir,
+        confidence=arguments.confidence,
+        bootstrap_replicates=10_000,
+        seed=0,
+    )
+    availability = report.get("availability", {})
+    stages = report.get("stages", ())
+    statistics_available = bool(availability.get("available", False))
+    telemetry_declared = bool(availability.get("telemetry_declared", False))
+    if statistics_available or telemetry_declared:
+        write_analysis_report(run_dir, report)
+    if not statistics_available:
+        print("training_average_regret = N/A", file=output)
+        print("confidence_interval = N/A", file=output)
+        return 0
+
+    if not stages:
+        print("training_average_regret = N/A", file=output)
+        print("confidence_interval = N/A", file=output)
+        return 0
+
+    print(
+        "Analysis: sampled average regret with an empirical confidence interval",
+        file=output,
+    )
+    confidence = format(arguments.confidence * 100.0, "g")
+    labels = (
+        ("player_0", "player 0"),
+        ("player_1", "player 1"),
+        ("maximum", "maximum"),
+    )
+    for stage in stages:
+        print(
+            f"Stage {stage['stage_index']} (rounds {stage['round_count']})",
+            file=output,
+        )
+        series = stage.get("series") or (
+            {
+                "stage_iteration": stage["last_stage_iteration"],
+                "point": stage["point"],
+                "confidence_interval": stage["confidence_interval"],
+            },
+        )
+        for iteration in series:
+            print(f"  Iteration {iteration['stage_iteration']}", file=output)
+            point = iteration["point"]
+            intervals = iteration["confidence_interval"]
+            for key, label in labels:
+                interval = intervals[key]
+                rendered_interval = (
+                    "N/A"
+                    if interval is None
+                    else "["
+                    + _analysis_number(interval[0])
+                    + ", "
+                    + _analysis_number(interval[1])
+                    + "]"
+                )
+                print(
+                    f"    {label}: estimate={_analysis_number(point[key])}; "
+                    f"{confidence}% CI={rendered_interval}",
+                    file=output,
+                )
     return 0
 
 
@@ -441,6 +662,11 @@ def solve(
 ) -> int:
     """Train the supported Lite game without importing Torch for other commands."""
 
+    from .training.artifacts import (
+        plan_resume_destination,
+        resolve_fresh_output,
+        update_run_manifest,
+    )
     from .training.config import CurriculumConfig, DeepCFRConfig
 
     if configuration.mode is not interface.ConfigurationMode.LITE:
@@ -452,6 +678,7 @@ def solve(
     enabled = [
         name
         for name in (
+            "impact",
             "hand",
             "fees",
             "dividend",
@@ -467,41 +694,72 @@ def solve(
             "Deep CFR requires default Lite rules; enabled overrides: "
             + ", ".join(enabled)
         )
-    if arguments.resume is not None and arguments.overwrite:
-        raise ValueError("--resume cannot be combined with --overwrite")
-
-    output_dir = getattr(arguments, "output_dir", None) or Path(
-        "artifacts/deep_cfr/smoke"
-        if arguments.smoke
-        else "artifacts/deep_cfr/default"
-    )
-    if output_dir.exists() and not output_dir.is_dir():
-        raise ValueError(f"output path is not a directory: {output_dir}")
-    if (
-        arguments.resume is None
-        and output_dir.exists()
-        and any(output_dir.iterdir())
-        and not arguments.overwrite
-    ):
-        raise ValueError(
-            f"output directory is not empty: {output_dir}; "
-            "choose another directory or pass --overwrite"
-        )
-
     if arguments.smoke:
         if configuration.round_count != 1:
             raise ValueError("--smoke requires --rounds 1")
         if arguments.curriculum is not None:
             raise ValueError("--smoke uses its fixed one-round curriculum")
-        training_config = DeepCFRConfig.smoke(
-            output_dir=output_dir,
-            seed=arguments.seed,
-        )
+        curriculum = None
     else:
+        # Validate the schedule before reserving a numbered destination.
         curriculum = CurriculumConfig.for_target(
             configuration.round_count,
             arguments.curriculum,
         )
+    try:
+        from .training.trainer import DeepCFRTrainer
+    except ModuleNotFoundError as error:
+        if error.name == "torch":
+            print(
+                "Deep CFR requires the optional training dependencies; "
+                "install requirements-training.txt.",
+                file=output,
+            )
+            return 2
+        raise
+
+    requested_output = getattr(arguments, "output_dir", None)
+    mode_name = configuration.rule_set.profile
+    if (
+        arguments.resume is not None
+        and arguments.overwrite
+        and requested_output is None
+    ):
+        raise ValueError(
+            "--overwrite on resume requires a differing unmanaged --output-dir"
+        )
+    if arguments.resume is None:
+        run_ref = resolve_fresh_output(
+            mode_name,
+            output_dir=requested_output,
+            run=arguments.run,
+            smoke=arguments.smoke,
+            overwrite=arguments.overwrite,
+        )
+        resume_checkpoint = None
+    else:
+        resume_plan = plan_resume_destination(
+            arguments.resume,
+            mode=mode_name,
+            output_dir=requested_output,
+            run=arguments.run,
+            smoke=True if arguments.smoke else None,
+            overwrite=arguments.overwrite,
+        )
+        run_ref = resume_plan.destination
+        resume_checkpoint = resume_plan.checkpoint
+
+    if run_ref.smoke:
+        if configuration.round_count != 1:
+            raise ValueError("--smoke requires --rounds 1")
+        if arguments.curriculum is not None:
+            raise ValueError("--smoke uses its fixed one-round curriculum")
+        training_config = DeepCFRConfig.smoke(
+            output_dir=run_ref.output_dir,
+            seed=arguments.seed,
+        )
+    else:
+        assert curriculum is not None
         training_config = DeepCFRConfig(
             curriculum=curriculum,
             iterations_per_stage=arguments.iterations_per_stage,
@@ -517,19 +775,8 @@ def solve(
             evaluation_pairs=arguments.evaluation_pairs,
             seed=arguments.seed,
             device=arguments.device,
-            output_dir=output_dir,
+            output_dir=run_ref.output_dir,
         )
-    try:
-        from .training.trainer import DeepCFRTrainer
-    except ModuleNotFoundError as error:
-        if error.name == "torch":
-            print(
-                "Deep CFR requires the optional training dependencies; "
-                "install requirements-training.txt.",
-                file=output,
-            )
-            return 2
-        raise
 
     print(
         "Solver: outcome-sampled strict-history Deep CFR "
@@ -552,10 +799,19 @@ def solve(
         f"{training_config.memory_capacity} each (3 reservoirs)",
         file=output,
     )
+    if resume_checkpoint is not None:
+        # Validate and restore before advancing the destination lifecycle.  A
+        # corrupt or incompatible checkpoint therefore leaves a newly
+        # reserved fork visibly unstarted rather than incorrectly active.
+        trainer.load_checkpoint(resume_checkpoint)
+    if run_ref.managed and run_ref.state != "completed":
+        run_ref = update_run_manifest(run_ref, state="active")
     result = trainer.train(
-        resume=arguments.resume,
-        overwrite=arguments.overwrite,
+        resume=resume_checkpoint,
+        overwrite=arguments.overwrite if resume_checkpoint is None else False,
     )
+    if run_ref.managed:
+        update_run_manifest(run_ref, state="completed")
     print(f"Completed rounds: {','.join(map(str, result.completed_rounds))}", file=output)
     print(f"Full checkpoint: {result.final_checkpoint}", file=output)
     print(f"Inference policy: {result.final_policy}", file=output)
@@ -567,7 +823,7 @@ def main(
     *,
     output: TextIO | None = None,
 ) -> int:
-    """Parse, resolve once, and dispatch one non-interactive subcommand."""
+    """Parse and dispatch one Stockpile command."""
 
     parser = build_parser()
     output = sys.stdout if output is None else output
@@ -575,6 +831,28 @@ def main(
     if arguments.command is None:
         parser.print_help(file=output)
         return 0
+
+    if arguments.command == "analyze":
+        try:
+            return analyze(arguments=arguments, output=output)
+        except (
+            ValueError,
+            RuntimeError,
+            FloatingPointError,
+            OSError,
+        ) as error:
+            parser.error(str(error))
+
+    if arguments.command == "play":
+        try:
+            return play(
+                mode=arguments.mode,
+                host=arguments.host,
+                port=arguments.port,
+                output=output,
+            )
+        except (ValueError, RuntimeError, OSError) as error:
+            parser.error(str(error))
 
     try:
         configuration = resolve_arguments(arguments)
@@ -591,8 +869,6 @@ def main(
             refresh=arguments.refresh,
             output=output,
         )
-    if arguments.command == "play":
-        return play(configuration, output=output)
     if arguments.command == "solve":
         try:
             return solve(configuration, arguments=arguments, output=output)

@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "strategy_version": "legal-action-semantic-v1",
+  "scenarios": {
+    "default_two_player_six_round": {
+      "seed": 101,
+      "player_count": 2,
+      "round_count": 6,
+      "options": {},
+      "covers": ["complete_game", "sealed_selling", "round_transition"]
+    },
+    "all_lite_options_market_impact": {
+      "seed": 2,
+      "player_count": 2,
+      "round_count": 1,
+      "options": {
+        "market_impact": true,
+        "starting_share": true,
+        "trading_fees": true,
+        "dividends": true,
+        "sell_order": true
+      },
+      "covers": [
+        "complete_game",
+        "action_card_target",
+        "price_above_10",
+        "dividend_decision",
+        "trading_fees",
+        "selling",
+        "market_movement"
+      ]
+    },
+    "two_player_outbid_rebid": {
+      "seed": 23,
+      "player_count": 2,
+      "round_count": 1,
+      "options": {},
+      "covers": [
+        "two_markers_per_player",
+        "outbid",
+        "rebid",
+        "four_unique_winning_piles",
+        "two_purchases_per_player",
+        "no_third_marker"
+      ]
+    },
+    "three_player_complete": {
+      "seed": 44,
+      "player_count": 3,
+      "round_count": 1,
+      "options": {},
+      "covers": ["complete_game"]
+    },
+    "four_player_complete": {
+      "seed": 45,
+      "player_count": 4,
+      "round_count": 1,
+      "options": {},
+      "covers": ["complete_game"]
+    },
+    "five_player_complete": {
+      "seed": 46,
+      "player_count": 5,
+      "round_count": 1,
+      "options": {},
+      "covers": ["complete_game", "five_pile_reflow"]
+    }
+  }
+}

@@ -283,6 +283,83 @@ class SemanticFingerprintTests(TemporaryCacheCase):
         )
         self.assertIsNone(self.cache.lookup(nonsequential.configured_game))
 
+    def test_uncapped_lite_price_semantics_do_not_reuse_capped_cache_entries(self):
+        lite = stockpile.resolve_configuration(
+            "lite",
+            player_count=2,
+            round_count=2,
+        )
+        capped_rules = replace(lite.rule_set, standard_price_ceiling=10)
+        capped_game = stockpile.StockpileGame(
+            parameters=lite.parameters,
+            rule_set=capped_rules,
+        )
+        capped = replace(
+            lite.configured_game,
+            rule_set=capped_rules,
+            game=capped_game,
+        )
+
+        uncapped_payload = stockpile.semantic_rule_payload(lite.configured_game)
+        capped_payload = stockpile.semantic_rule_payload(capped)
+        self.assertIsNone(uncapped_payload["standard_price_ceiling"])
+        self.assertNotIn("standard_price_ceiling", capped_payload)
+        self.assertNotEqual(
+            stockpile.semantic_fingerprint(lite.configured_game),
+            stockpile.semantic_fingerprint(capped),
+        )
+
+        # Rewrite one test record as the historical capped-Lite payload. The
+        # old entry remains usable only for that exact capped semantic tree.
+        self.cache.save(lite.configured_game, _information_result(lite))
+        document = json.loads(self.learned_path.read_text(encoding="utf-8"))
+        entry = next(iter(document["entries"].values()))
+        entry["semantic_rules"] = capped_payload
+        encoded = json.dumps(
+            capped_payload,
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        capped_fingerprint = hashlib.sha256(encoded).hexdigest()
+        entry["fingerprint"] = capped_fingerprint
+        document["entries"] = {capped_fingerprint: entry}
+        self.learned_path.write_text(json.dumps(document), encoding="utf-8")
+
+        self.assertIsNone(self.cache.lookup(lite.configured_game))
+        self.assertIsNotNone(self.cache.lookup(capped))
+
+    def test_classic_and_deluxe_retain_historical_capped_fingerprints(self):
+        for profile in ("classic", "deluxe"):
+            with self.subTest(profile=profile):
+                configuration = stockpile.resolve_configuration(
+                    profile,
+                    player_count=2,
+                    round_count=2,
+                )
+                payload = stockpile.semantic_rule_payload(
+                    configuration.configured_game
+                )
+                self.assertEqual(
+                    configuration.rule_set.standard_price_ceiling,
+                    10,
+                )
+                self.assertNotIn("standard_price_ceiling", payload)
+                expected = hashlib.sha256(
+                    json.dumps(
+                        payload,
+                        allow_nan=False,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ).encode("utf-8")
+                ).hexdigest()
+                self.assertEqual(
+                    stockpile.semantic_fingerprint(configuration.configured_game),
+                    expected,
+                )
+
 
 class CachePersistenceTests(TemporaryCacheCase):
     def test_corrupt_json_is_ignored_and_replaced_by_a_valid_save(self):

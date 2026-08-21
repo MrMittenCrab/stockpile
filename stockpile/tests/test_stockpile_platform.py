@@ -338,6 +338,7 @@ class ConfigurationTests(unittest.TestCase):
             [4, 2, 1, 0, -2, -3],
         )
         self.assertEqual(_nested_value(rules, "starting_shares_per_player"), 0)
+        self.assertIsNone(_nested_value(rules, "standard_price_ceiling"))
         for feature in (
             "trading_fees",
             "market_action_cards",
@@ -365,6 +366,18 @@ class ConfigurationTests(unittest.TestCase):
 
         self.assertTrue(rules.sequential_observable_selling)
 
+    def test_lite_market_impact_switch_enables_the_whole_action_layer(self):
+        rules = _configure(
+            "lite",
+            overrides={"impact": True},
+        ).rule_set
+
+        self.assertTrue(rules.market_action_cards)
+        self.assertTrue(rules.stock_boom_cards)
+        self.assertTrue(rules.stock_bust_cards)
+        self.assertIn("action", rules.phase_order)
+        self.assertEqual(rules.standard_price_ceiling, None)
+
     def test_classic_and_deluxe_profiles_are_layered(self):
         classic = _configure("classic").rule_set
         deluxe = _configure("deluxe").rule_set
@@ -386,6 +399,7 @@ class ConfigurationTests(unittest.TestCase):
         ):
             self.assertTrue(_bool_rule(classic, feature), feature)
         for rules in (classic, deluxe):
+            self.assertEqual(rules.standard_price_ceiling, 10)
             self.assertFalse(_bool_rule(rules, "advanced_price_tracks"))
             self.assertFalse(_bool_rule(rules, "advanced_track_dividends"))
             self.assertTrue(rules.sequential_observable_selling)
@@ -393,7 +407,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertTrue(_bool_rule(deluxe, "investors"))
         self.assertEqual(deluxe.enabled_investors, stockpile.stockpile_platform.INVESTOR_NAMES)
 
-    def test_grouped_optional_overrides_apply_to_every_profile(self):
+    def test_grouped_optional_overrides_remain_available_to_classic_and_deluxe(self):
         grouped = {
             "hand": False,
             "fees": False,
@@ -403,7 +417,7 @@ class ConfigurationTests(unittest.TestCase):
             "stock_tracks": True,
             "sell_order": False,
         }
-        for profile in ("lite", "classic", "deluxe"):
+        for profile in ("classic", "deluxe"):
             with self.subTest(profile=profile):
                 rules = stockpile.configure_game(
                     stockpile.get_parameter_preset(
@@ -422,7 +436,103 @@ class ConfigurationTests(unittest.TestCase):
                 self.assertFalse(rules.advanced_track_dividends)
                 self.assertFalse(rules.sequential_observable_selling)
                 self.assertEqual(rules.investors, profile == "deluxe")
-                self.assertEqual(rules.market_action_cards, profile != "lite")
+                self.assertTrue(rules.market_action_cards)
+
+    def test_lite_rejects_removed_mechanics_even_through_raw_parameters(self):
+        unsupported = (
+            {"split": True},
+            {"stock_splits": True},
+            {"repeat_split_bonus": True},
+            {"majority": True},
+            {"majority_bonus": True},
+            {"stock_tracks": True},
+            {"advanced_price_tracks": True},
+            {"advanced_track_dividends": True},
+        )
+        for overrides in unsupported:
+            with self.subTest(overrides=overrides), self.assertRaisesRegex(
+                ValueError,
+                "Lite does not support",
+            ):
+                _configure("lite", overrides=overrides)
+
+    def test_lite_raw_string_booleans_do_not_enable_removed_mechanics(self):
+        disabled = _configure(
+            "lite",
+            overrides={
+                "stock_splits": "false",
+                "repeat_split_bonus": "false",
+                "majority_bonus": "false",
+                "advanced_price_tracks": "false",
+                "advanced_track_dividends": "false",
+            },
+        ).rule_set
+        for name in (
+            "stock_splits",
+            "repeat_split_bonus",
+            "majority_bonus",
+            "advanced_price_tracks",
+            "advanced_track_dividends",
+        ):
+            self.assertIs(getattr(disabled, name), False, name)
+
+        for name in (
+            "stock_splits",
+            "repeat_split_bonus",
+            "majority_bonus",
+            "advanced_price_tracks",
+            "advanced_track_dividends",
+        ):
+            with self.subTest(name=name), self.assertRaisesRegex(
+                ValueError,
+                "Lite does not support",
+            ):
+                _configure("lite", overrides={name: "true"})
+
+    def test_lite_raw_string_action_card_flags_are_decoded_as_booleans(self):
+        enabled = _configure(
+            "lite",
+            overrides={
+                "market_action_cards": "true",
+                "stock_boom_cards": "true",
+                "stock_bust_cards": "true",
+            },
+        ).rule_set
+        disabled = _configure(
+            "lite",
+            overrides={
+                "market_action_cards": "false",
+                "stock_boom_cards": "false",
+                "stock_bust_cards": "false",
+            },
+        ).rule_set
+
+        for name in (
+            "market_action_cards",
+            "stock_boom_cards",
+            "stock_bust_cards",
+        ):
+            self.assertIs(getattr(enabled, name), True, name)
+            self.assertIs(getattr(disabled, name), False, name)
+
+    def test_market_impact_is_configurable_only_for_lite(self):
+        configured = stockpile.configure_game(
+            stockpile.get_parameter_preset(
+                "lite",
+                rule_overrides={"impact": True},
+            )
+        )
+        self.assertTrue(configured.rule_set.market_action_cards)
+
+        for profile in ("classic", "deluxe"):
+            with self.subTest(profile=profile), self.assertRaisesRegex(
+                ValueError,
+                "only in Lite",
+            ):
+                stockpile.get_parameter_preset(
+                    profile,
+                    rule_overrides={"impact": False},
+                )
 
     def test_canonical_presets_reject_fixed_layer_overrides(self):
         for key in (
@@ -640,6 +750,41 @@ class SetupAndTransitionTests(unittest.TestCase):
         self.assertNotIn("bust", text)
         self.assertNotIn("dividend", text)
 
+    def test_lite_market_impact_deck_contains_both_action_directions(self):
+        configured = _configure("lite", overrides={"impact": True})
+        initial = stockpile.randomize_initial_input(configured.rule_set, 19)
+        cards = _plain(initial.market_deck_order)
+        action_values = {
+            card["value"]
+            for card in cards
+            if card.get("card_type") == "action"
+        }
+
+        self.assertEqual(action_values, {"boom", "bust"})
+
+    def test_lite_market_impact_action_targets_a_company_and_moves_above_ten(self):
+        configured = _configure("lite", overrides={"impact": True})
+        state = configured.game.new_initial_state()
+        state._chance_kind = ""
+        state.players[0].acquired_actions.append("boom")
+        state._begin_action_phase()
+        state._set_company_price(0, 10)
+
+        direction = configured.rule_set.action_codec.offset("direction")
+        company = configured.rule_set.action_codec.offset("company")
+        self.assertIn(direction, state.legal_actions())
+        state.apply_action(direction)
+        self.assertEqual(state.stage, "action_company")
+        self.assertIn(company, state.legal_actions())
+        state.apply_action(company)
+
+        self.assertEqual(
+            state.prices[configured.rule_set.company_names[0]],
+            12,
+        )
+        self.assertEqual(state.players[0].acquired_actions, [])
+        self.assertEqual(state.phase, "selling")
+
     def test_advance_is_functional_and_rejects_unknown_action(self):
         _, state = _initial_state(self.configured, 23)
         actor = state.current_player()
@@ -684,7 +829,7 @@ class SetupAndTransitionTests(unittest.TestCase):
         prices = _nested_value(state_a, "prices")
         self.assertIsInstance(prices, Mapping)
         self.assertTrue(prices)
-        self.assertTrue(all(1 <= int(price) <= 10 for price in prices.values()))
+        self.assertTrue(all(1 <= int(price) for price in prices.values()))
 
 
 class DetailedRuleBehaviorTests(unittest.TestCase):
@@ -1267,6 +1412,60 @@ class ObservationAndScoringTests(unittest.TestCase):
             bonuses,
         )
 
+    def test_lite_prices_above_ten_flow_through_views_tensors_and_scoring(self):
+        configured = _configure("lite", round_count=1)
+        state = configured.game.new_initial_state()
+        state._set_company_price(0, 10)
+        state.players[0].regular_portfolio[0] = 2
+
+        state._move_price(0, 4)
+
+        company = configured.rule_set.company_names[0]
+        self.assertEqual(state.prices[company], 14)
+        self.assertEqual(state.players[0].regular_portfolio[0], 2)
+        self.assertEqual(state.players[0].split_portfolio[0], 0)
+        self.assertFalse(
+            any(record.get("stage") == "split" for record in state.history_records)
+        )
+
+        information, _ = stockpile.observe_game_state(
+            configured.rule_set,
+            state,
+            0,
+        )
+        self.assertEqual(_member(information, "public_state")["prices"][company], 14)
+
+        tensor = state.observation_tensor(0)
+        price_cursor = (
+            5
+            + 4
+            + 10
+            + len(stockpile.stockpile_platform.Phase)
+            + 1
+            + 1
+            + 5
+        )
+        self.assertAlmostEqual(float(tensor[price_cursor]), 14 / 15)
+
+        result = stockpile.score_game(configured.rule_set, state)
+        self.assertEqual(result.liquidation_values[0], 28)
+        self.assertEqual(result.final_cash_by_player[0], 58)
+
+    def test_classic_and_deluxe_keep_the_standard_split_ceiling(self):
+        for profile in ("classic", "deluxe"):
+            with self.subTest(profile=profile):
+                configured = _configure(profile, round_count=1)
+                state = configured.game.new_initial_state()
+                state._set_company_price(0, 10)
+                state.players[0].regular_portfolio[0] = 1
+
+                state._move_price(0, 1)
+
+                company = configured.rule_set.company_names[0]
+                self.assertEqual(state.prices[company], 6)
+                self.assertEqual(state.players[0].regular_portfolio[0], 0)
+                self.assertEqual(state.players[0].split_portfolio[0], 1)
+
     def test_endgame_receipts_settle_fee_debt_without_mutating_state(self):
         configured = _configure("classic", player_count=2, round_count=1)
         state = configured.game.new_initial_state()
@@ -1369,6 +1568,21 @@ class OpenSpielAndWrapperTests(unittest.TestCase):
         self.assertEqual(lite["shared_action_head"], 29)
         self.assertGreater(lite["max_game_length"], 0)
         self.assertGreater(lite["observation_size"], 0)
+
+        impact_sizes = {2: 26, 3: 25, 4: 26, 5: 27}
+        for player_count, expected_size in impact_sizes.items():
+            with self.subTest(profile="lite-impact", player_count=player_count):
+                report = stockpile.complexity_report(
+                    stockpile.GameParameters(
+                        player_count=player_count,
+                        rules_profile="lite",
+                        rule_overrides={"impact": True},
+                    )
+                )
+                self.assertEqual(report["num_distinct_actions"], expected_size)
+                self.assertEqual(report["max_legal_actions"], 8)
+                self.assertEqual(report["max_chance_outcomes"], 8)
+                self.assertEqual(report["shared_action_head"], 29)
 
         classic_sizes = {2: 28, 3: 27, 4: 28, 5: 29}
         for player_count, expected_size in classic_sizes.items():

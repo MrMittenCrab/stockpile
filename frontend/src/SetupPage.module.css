@@ -1,0 +1,39 @@
+.page { min-height: 100vh; }
+.header { height: 58px; display: flex; align-items: center; gap: 18px; padding: 0 clamp(22px, 5vw, 70px); border-bottom: 1px solid #2a3847; background: rgba(8,13,20,.76); }
+.header strong { letter-spacing: .18em; font-size: 18px; }
+.header span { font-size: 10px; letter-spacing: .16em; color: #7f90a2; border-left: 1px solid #3c4a58; padding-left: 18px; }
+.hero { min-height: calc(100vh - 58px); display: grid; grid-template-columns: minmax(280px, 1fr) minmax(420px, 560px); gap: clamp(40px, 7vw, 120px); align-items: center; max-width: 1360px; margin: auto; padding: clamp(34px, 7vw, 94px); }
+.intro small, .panelHeading small { letter-spacing: .18em; color: #7f92a4; font-weight: 700; }
+.intro h1 { font-size: clamp(48px, 6vw, 88px); line-height: .95; letter-spacing: -.055em; margin: 18px 0 24px; }
+.intro p { color: #9da9b5; line-height: 1.65; max-width: 430px; }
+.marketGlyphs { display: flex; gap: 8px; margin-top: 40px; }
+.marketGlyphs span { width: 44px; height: 44px; display: grid; place-items: center; color: white; font-weight: 850; border-radius: 4px 10px 4px 4px; box-shadow: inset 0 1px rgba(255,255,255,.28), 0 5px 12px rgba(0,0,0,.3); }
+.marketGlyphs span:nth-child(1) { background:#cf3d4e }.marketGlyphs span:nth-child(2) { background:#287bc0 }.marketGlyphs span:nth-child(3) { background:#dd9f28 }.marketGlyphs span:nth-child(4) { background:#3a9a73 }.marketGlyphs span:nth-child(5) { background:#7c52ae }.marketGlyphs span:nth-child(6) { background:#c66431 }
+.panel { border: 1px solid #2b3a49; background: linear-gradient(145deg, #17222e, #101821); box-shadow: 0 28px 70px rgba(0,0,0,.34), inset 0 1px rgba(255,255,255,.04); padding: clamp(24px, 4vw, 40px); }
+.panelHeading { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 28px; }
+.panelHeading h2 { margin: 5px 0 0; font-size: 28px; }
+.panelHeading > span { padding: 7px 9px; border: 1px solid #3a4b5d; color: #94a6b6; font-size: 10px; letter-spacing: .12em; }
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.row label { color: #91a0af; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+select, .row input, .nameField input { width: 100%; margin-top: 8px; color: #f5f7f9; background: #0b121a; border: 1px solid #344454; border-radius: 2px; padding: 11px 12px; outline: none; }
+select:focus, input:focus { border-color: #8298ac; box-shadow: 0 0 0 2px rgba(143,164,182,.12); }
+fieldset { padding: 0; border: 0; margin: 26px 0 0; }
+legend { color: #91a0af; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; margin-bottom: 10px; }
+.nameField { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.nameField span { width: 28px; height: 36px; display: grid; place-items: center; border: 1px solid #3b4e60; border-radius: 50%; color: #aebbc6; font-weight: 800; font-size: 12px; }
+.nameField input { margin: 0; }
+.options { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.option { min-height: 66px; padding: 11px; display: flex; align-items: flex-start; gap: 10px; border: 1px solid #2b3b4b; background: #0d151e; cursor: pointer; }
+.option input { accent-color: #d7e0e7; margin-top: 4px; }
+.option span { display: grid; gap: 4px; }.option strong { font-size: 12px; }.option small { color: #81909e; line-height: 1.25; }
+.create { margin-top: 28px; width: 100%; padding: 14px; border: 1px solid #e4e9ed; color: #0b1118; background: #e4e9ed; font-weight: 850; letter-spacing: .05em; cursor: pointer; }
+.create:disabled { opacity: .45; cursor: default; }
+.error { color: #ffc3c7; background: #3e1d24; border: 1px solid #6c303a; padding: 10px; }.loading { color: #93a0ac; }
+.lobby > p { color: #9aa7b4; line-height: 1.5; }
+.seats { display: grid; gap: 9px; margin: 24px 0; }
+.seats a { display: grid; grid-template-columns: 34px 1fr auto; align-items: center; gap: 12px; border: 1px solid #354759; padding: 12px; text-decoration: none; background: #0c141d; }
+.seats a:hover { border-color: #899caf; background: #131e29; }
+.seats a > span { width: 30px; height: 30px; display: grid; place-items: center; border: 1px solid #71869a; border-radius: 50%; font-weight: 800; }.seats a small { color: #8795a3; }
+.secondary { color: #aebac5; background: none; border: 0; padding: 6px 0; text-decoration: underline; cursor: pointer; }
+@media (max-width: 900px) { .hero { grid-template-columns: 1fr; }.intro { padding-top: 20px; }.intro h1 { font-size: 54px; }.panel { max-width: 600px; width: 100%; } }
+@media (max-width: 520px) { .hero { padding: 24px 16px; }.options { grid-template-columns: 1fr; }.intro h1 { font-size: 44px; }.marketGlyphs span { width: 36px; height: 36px; } }

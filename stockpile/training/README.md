@@ -3,7 +3,8 @@
 The training package implements an outcome-sampled neural CFR solver for the
 canonical two-player Stockpile Lite game. Lite uses sealed selling by default:
 players commit sales without observing earlier commitments, then all sales are
-published and settled as one batch.
+published and settled as one batch. Training deliberately keeps optional Market
+Impact off and retains the compact 18-action policy head.
 
 Install the optional training environment:
 
@@ -14,16 +15,20 @@ python -m pip install -r requirements-training.txt
 Run the checked-in one-round smoke preset:
 
 ```console
-python -m stockpile solve --mode lite --rounds 1 --smoke \
-  --output-dir artifacts/deep_cfr/smoke
+python -m stockpile solve --mode lite --rounds 1 --smoke
 ```
 
 Start the default six-round curriculum:
 
 ```console
-python -m stockpile solve --mode lite --rounds 6 \
-  --output-dir artifacts/deep_cfr/default
+python -m stockpile solve --mode lite --rounds 6
 ```
+
+Normal runs are reserved atomically as
+`artifacts/deep_cfr/lite/run_01`, `run_02`, and so on. Smoke runs are numbered
+independently under `artifacts/deep_cfr/smoke/`. Use `--run INT` to request a
+specific unused number. `--output-dir PATH` remains available for an explicit
+unmanaged destination and cannot be combined with `--run`.
 
 The default stages are `1,2,3,4,6`. Round 5 is deliberately omitted, but it
 can be requested manually with `--curriculum 1,2,3,4,5,6`. At every horizon
@@ -34,17 +39,42 @@ Resume an interrupted stage from its full checkpoint:
 
 ```console
 python -m stockpile solve --mode lite --rounds 6 \
-  --output-dir artifacts/deep_cfr/default \
-  --resume artifacts/deep_cfr/default/round_04/full.pt
+  --resume artifacts/deep_cfr/lite/run_03/round_04/full.pt
 ```
+
+Reserved or active new-format runs resume in place unless a different
+destination is selected. Completed runs, legacy checkpoints under
+`artifacts/deep_cfr/default/` or the old smoke layout, and unmarked historical
+custom outputs resume into a newly numbered run. The source stays unchanged
+and the fork records its checkpoint hash and source-path provenance. Explicit
+unmanaged forks record the same information in `resume_provenance.json`.
 
 Each stage writes:
 
 - `full.pt`: networks, optimizers, reservoirs, counters, semantic metadata,
-  and random-number-generator states for an exact same-stage resume.
+  random-number-generator states, and a self-contained signed-regret snapshot
+  for an exact same-stage resume.
 - `policy.pt`: the smaller average-policy network and inference metadata.
 - `metrics.jsonl`: losses, memory sizes, timing, and paired seat-swapped
   evaluation against a uniform legal-action policy.
+- `sampled_regret/iteration_XXXXXX.npz`: signed per-traversal outcome-sampled
+  regret records, stored independently from reservoir memory.
+
+Analyze one run after completion or interruption:
+
+```console
+python -m stockpile analyze --mode lite --run 3
+python -m stockpile analyze --output-dir artifacts/deep_cfr/lite/run_03 \
+  --confidence 0.90
+```
+
+This writes `analysis/sampled_average_regret.json`, containing player 0,
+player 1, and maximum-player values after every recorded iteration. Its
+empirical interval resamples complete traversals only within their original
+iteration and update-player strata. It is sampled average regret, not
+exploitability, NashConv, or a formal equilibrium guarantee. Legacy artifacts
+without the signed records report `N/A`; their reservoir samples, losses, and
+policy weights are never used as substitutes.
 
 The default batch contains at most 32 samples and each of the three
 stage-local reservoirs retains at most 2,000 samples. These are deliberately
@@ -60,9 +90,9 @@ This is the scalable outcome-sampling variant selected for the large Stockpile
 tree. Evaluation reports paired tournament estimates and confidence intervals;
 it does not calculate exact NashConv or make an equilibrium-convergence claim.
 
-Fresh runs refuse to write into a nonempty output directory. Pass
-`--overwrite` only when replacing those artifacts is intentional. Full
-checkpoints use PyTorch's pickle-backed format and must be loaded only from a
-trusted source. Float64 advantage networks are required for the sampled regret
-range, so automatic device selection uses CUDA when available and CPU
-otherwise; MPS training is not supported.
+Fresh runs never reuse numbered directories. `--overwrite` is accepted only
+with an explicit unmanaged `--output-dir`; managed and legacy directories are
+protected. Full checkpoints use PyTorch's pickle-backed format and must be
+loaded only from a trusted source. Float64 advantage networks are required for
+the sampled regret range, so automatic device selection uses CUDA when
+available and CPU otherwise; MPS training is not supported.

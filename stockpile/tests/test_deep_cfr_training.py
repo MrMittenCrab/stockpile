@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import hashlib
 from io import StringIO
 import importlib.util
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -91,6 +93,7 @@ class TrainerSmokeTests(unittest.TestCase):
     def test_one_round_train_export_and_exact_checkpoint_restore(self):
         import torch
 
+        from stockpile import complexity_cache
         from stockpile.training.policy import DeepCFRPolicy
         from stockpile.training.trainer import DeepCFRTrainer
 
@@ -122,6 +125,54 @@ class TrainerSmokeTests(unittest.TestCase):
             self.assertFalse(policy.metadata["sell_order"])
             self.assertFalse(policy.metadata["equilibrium_claim"])
 
+            capped_rules = replace(
+                configuration.rule_set,
+                standard_price_ceiling=10,
+            )
+            capped_game = replace(
+                configuration.configured_game,
+                rule_set=capped_rules,
+            )
+            capped_fingerprint = complexity_cache.semantic_fingerprint(capped_game)
+
+            legacy_policy_path = Path(temporary) / "legacy_capped_policy.pt"
+            legacy_policy_payload = torch.load(
+                result.final_policy,
+                map_location="cpu",
+                weights_only=False,
+            )
+            legacy_policy_payload["metadata"][
+                "semantic_fingerprint"
+            ] = capped_fingerprint
+            legacy_policy_payload["metadata"].pop("price_semantics", None)
+            torch.save(legacy_policy_payload, legacy_policy_path)
+            self.assertEqual(
+                DeepCFRPolicy.load(legacy_policy_path).metadata[
+                    "semantic_fingerprint"
+                ],
+                capped_fingerprint,
+            )
+
+            legacy_full_path = Path(temporary) / "legacy_capped_full.pt"
+            legacy_full_payload = torch.load(
+                result.final_checkpoint,
+                map_location="cpu",
+                weights_only=False,
+            )
+            legacy_full_payload["schema_version"] = 1
+            legacy_full_payload["metadata"][
+                "semantic_fingerprint"
+            ] = capped_fingerprint
+            legacy_full_payload["metadata"].pop("price_semantics", None)
+            torch.save(legacy_full_payload, legacy_full_path)
+            legacy_full_loader = DeepCFRTrainer(
+                config,
+                base_configuration=configuration,
+                output=StringIO(),
+            )
+            with self.assertRaisesRegex(ValueError, "game semantics do not match"):
+                legacy_full_loader.load_checkpoint(legacy_full_path)
+
             original_next_random = trainer.rng.random()
             original_sample_ids = [
                 sample.information.perfect_recall_id
@@ -149,7 +200,21 @@ class TrainerSmokeTests(unittest.TestCase):
                 self.assertTrue(torch.equal(original, loaded))
 
             metrics_path = Path(temporary) / "metrics.jsonl"
-            metrics_before_resume = metrics_path.read_text(encoding="utf-8")
+            checkpoint_metrics = metrics_path.read_bytes()
+            post_checkpoint_metrics = (
+                checkpoint_metrics
+                + b'{"kind":"post_checkpoint_uncommitted_metric"}\n'
+            )
+            metrics_path.write_bytes(post_checkpoint_metrics)
+            config_path = Path(temporary) / "config.json"
+            config_document = json.loads(config_path.read_text(encoding="utf-8"))
+            config_document["future_additive_metadata"] = {
+                "preserve": "exactly"
+            }
+            post_checkpoint_config = (
+                json.dumps(config_document, indent=1, sort_keys=False) + "\n"
+            ).encode("utf-8")
+            config_path.write_bytes(post_checkpoint_config)
             resumed = DeepCFRTrainer(
                 config,
                 base_configuration=configuration,
@@ -162,9 +227,46 @@ class TrainerSmokeTests(unittest.TestCase):
             evaluate_policy.assert_not_called()
             self.assertEqual(resumed_result.completed_rounds, (1,))
             self.assertEqual(resumed_result.metrics, result.metrics)
-            self.assertEqual(
-                metrics_path.read_text(encoding="utf-8"),
-                metrics_before_resume,
+            self.assertEqual(metrics_path.read_bytes(), checkpoint_metrics)
+            self.assertEqual(config_path.read_bytes(), post_checkpoint_config)
+
+            for source_name, preserved in (("metrics.jsonl", post_checkpoint_metrics),):
+                with self.subTest(recovered=source_name):
+                    digest = hashlib.sha256(preserved).hexdigest()
+                    recovery_dir = (
+                        Path(temporary)
+                        / "recovery"
+                        / "resume_reconciliation"
+                        / source_name
+                        / f"sha256-{digest}"
+                    )
+                    self.assertEqual(
+                        (recovery_dir / source_name).read_bytes(),
+                        preserved,
+                    )
+                    provenance = json.loads(
+                        (recovery_dir / "provenance.json").read_text(
+                            encoding="utf-8"
+                        )
+                    )
+                    self.assertEqual(
+                        provenance,
+                        {
+                            "kind": "stockpile_deep_cfr_resume_recovery",
+                            "preserved_byte_count": len(preserved),
+                            "preserved_sha256": digest,
+                            "reason": "resume_reconciliation",
+                            "schema_version": 1,
+                            "source_path": source_name,
+                        },
+                    )
+            self.assertFalse(
+                (
+                    Path(temporary)
+                    / "recovery"
+                    / "resume_reconciliation"
+                    / "config.json"
+                ).exists()
             )
 
             incompatible_output = Path(temporary) / "incompatible"
@@ -278,6 +380,16 @@ class TrainerSmokeTests(unittest.TestCase):
                         "lite",
                         round_count=1,
                         sell_order=True,
+                    ),
+                    output=StringIO(),
+                )
+            with self.assertRaisesRegex(ValueError, "enabled overrides.*impact"):
+                DeepCFRTrainer(
+                    config,
+                    base_configuration=stockpile.resolve_configuration(
+                        "lite",
+                        round_count=1,
+                        impact=True,
                     ),
                     output=StringIO(),
                 )

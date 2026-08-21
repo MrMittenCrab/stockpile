@@ -127,11 +127,19 @@ class GameConfig:
             parameters.action_space_mode,
             self.action_space_mode,
         )
+        require("stock_boom_cards", rules.stock_boom_cards, self.impact)
+        require("stock_bust_cards", rules.stock_bust_cards, self.impact)
         require(
-            "Market Impact",
-            self.impact,
-            self.mode is not ConfigurationMode.LITE,
+            "standard price ceiling",
+            rules.standard_price_ceiling,
+            None if self.mode is ConfigurationMode.LITE else 10,
         )
+        if self.mode is ConfigurationMode.LITE:
+            require("Lite stock splits", self.split, False)
+            require("Lite majority bonuses", self.majority, False)
+            require("Lite advanced price tracks", self.stock_tracks, False)
+        else:
+            require("Market Impact", self.impact, True)
         require(
             "Investors",
             self.investor,
@@ -164,7 +172,7 @@ class GameConfig:
 
     @property
     def impact(self) -> bool:
-        """Whether the profile's fixed Market Impact/Action phase is active."""
+        """Whether the Market Impact cards and Action phase are active."""
 
         return bool(self.rule_set.market_action_cards)
 
@@ -176,7 +184,7 @@ class GameConfig:
 
     @property
     def lite_options(self) -> tuple[LiteOptionalRule, ...]:
-        """Legacy projection of the five former Lite option names."""
+        """Compatibility projection of the supported Lite option names."""
 
         if self.mode is not ConfigurationMode.LITE:
             return ()
@@ -184,8 +192,7 @@ class GameConfig:
             LiteOptionalRule.STARTING_SHARE: self.hand,
             LiteOptionalRule.TRADING_FEES: self.fees,
             LiteOptionalRule.DIVIDENDS: self.dividend,
-            LiteOptionalRule.STOCK_SPLITS: self.split,
-            LiteOptionalRule.MAJORITY_BONUS: self.majority,
+            LiteOptionalRule.MARKET_IMPACT: self.impact,
         }
         return tuple(option for option in LiteOptionalRule if enabled[option])
 
@@ -303,11 +310,9 @@ _LITE_OPTION_ALIASES = {
     "fees": LiteOptionalRule.TRADING_FEES.value,
     "trading_fee": LiteOptionalRule.TRADING_FEES.value,
     "dividend": LiteOptionalRule.DIVIDENDS.value,
-    "split": LiteOptionalRule.STOCK_SPLITS.value,
-    "splits": LiteOptionalRule.STOCK_SPLITS.value,
-    "majority": LiteOptionalRule.MAJORITY_BONUS.value,
-    "bonus": LiteOptionalRule.MAJORITY_BONUS.value,
-    "bonuses": LiteOptionalRule.MAJORITY_BONUS.value,
+    "impact": LiteOptionalRule.MARKET_IMPACT.value,
+    "market": LiteOptionalRule.MARKET_IMPACT.value,
+    "market_impact": LiteOptionalRule.MARKET_IMPACT.value,
     "share": LiteOptionalRule.STARTING_SHARE.value,
     "starting_shares": LiteOptionalRule.STARTING_SHARE.value,
 }
@@ -357,6 +362,7 @@ _MODE_DEFAULTS: dict[ConfigurationMode, dict[str, bool]] = {
         "majority": False,
         "stock_tracks": False,
         "sell_order": False,
+        "impact": False,
     },
     ConfigurationMode.CLASSIC: {
         "hand": True,
@@ -366,6 +372,7 @@ _MODE_DEFAULTS: dict[ConfigurationMode, dict[str, bool]] = {
         "majority": True,
         "stock_tracks": False,
         "sell_order": True,
+        "impact": True,
     },
     ConfigurationMode.DELUXE: {
         "hand": True,
@@ -375,6 +382,7 @@ _MODE_DEFAULTS: dict[ConfigurationMode, dict[str, bool]] = {
         "majority": True,
         "stock_tracks": False,
         "sell_order": True,
+        "impact": True,
     },
 }
 
@@ -399,6 +407,7 @@ def resolve_configuration(
     stock_tracks: bool | None = None,
     sell_order: bool | None = None,
     action_space_mode: ActionSpaceMode = "compact",
+    impact: bool | None = None,
 ) -> GameConfig:
     """Resolve defaults and overrides into one immutable engine-backed value."""
 
@@ -421,13 +430,40 @@ def resolve_configuration(
             "sell_order", sell_order, defaults["sell_order"]
         ),
     }
+    if selected_mode is ConfigurationMode.LITE:
+        resolved["impact"] = _resolve_switch(
+            "impact", impact, defaults["impact"]
+        )
+        unsupported = [
+            name
+            for name in ("split", "majority", "stock_tracks")
+            if resolved[name]
+        ]
+        if unsupported:
+            raise ValueError(
+                "Lite does not support enabled overrides: "
+                + ", ".join(unsupported)
+            )
+    else:
+        if impact is not None:
+            if type(impact) is not bool:
+                raise TypeError("impact must be true, false, or None")
+            raise ValueError(
+                "impact is fixed on for Classic and Deluxe and cannot be overridden"
+            )
+        resolved["impact"] = defaults["impact"]
 
+    rule_overrides = dict(resolved)
+    if selected_mode is not ConfigurationMode.LITE:
+        # Market Impact is a fixed profile rule outside Lite. Omitting the
+        # friendly key distinguishes the default from a forbidden override.
+        rule_overrides.pop("impact")
     parameters = platform.GameParameters(
         player_count=player_count,
         rules_profile=selected_mode.value,
         round_count=round_count,
         deluxe_investors=selected_mode is ConfigurationMode.DELUXE,
-        rule_overrides=dict(resolved),
+        rule_overrides=rule_overrides,
         action_space_mode=action_space_mode,
     )
     configured_game = platform.configure_game(parameters)
@@ -459,7 +495,7 @@ def create_configuration(
 ) -> GameConfig:
     """Compatibility wrapper around :func:`resolve_configuration`.
 
-    The old Lite option sequence maps to the five corresponding friendly
+    The old Lite option sequence maps to the supported corresponding friendly
     switches. Investors are now a fixed Deluxe rule, so ``False`` cannot turn
     them off and ``True`` remains invalid outside Deluxe.
     """
@@ -481,15 +517,16 @@ def create_configuration(
         "dividend": None,
         "split": None,
         "majority": None,
+        "impact": None,
     }
     if selected_mode is ConfigurationMode.LITE:
         legacy_switches = {
             "hand": LiteOptionalRule.STARTING_SHARE in selected_lite_options,
             "fees": LiteOptionalRule.TRADING_FEES in selected_lite_options,
             "dividend": LiteOptionalRule.DIVIDENDS in selected_lite_options,
-            "split": LiteOptionalRule.STOCK_SPLITS in selected_lite_options,
-            "majority": LiteOptionalRule.MAJORITY_BONUS
-            in selected_lite_options,
+            "split": False,
+            "majority": False,
+            "impact": LiteOptionalRule.MARKET_IMPACT in selected_lite_options,
         }
     return resolve_configuration(
         selected_mode,
