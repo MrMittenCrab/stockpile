@@ -2,8 +2,8 @@
 
 Parsing is intentionally isolated from configuration resolution. Rules,
 complexity, and solve share the same resolved configuration; browser play
-lazily launches its own local setup API. Importing this module has no terminal
-side effects.
+lazily launches its local API and Vite workstation. Importing this module has
+no terminal side effects.
 """
 
 from __future__ import annotations
@@ -200,13 +200,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     play_parser = commands.add_parser(
         "play",
-        help="launch the local Stockpile Lite browser API",
+        help="launch the local Stockpile Trainer",
         description=(
-            "Launch the local-only Stockpile Lite browser API. "
+            "Launch the local-only Stockpile Lite API and browser interface. "
             "Games are configured in the browser."
         ),
     )
-    play_parser.add_argument("--mode", required=True, choices=("lite",))
+    play_parser.add_argument("--mode", default="lite", choices=("lite",))
     play_parser.add_argument(
         "--host",
         type=_loopback_host,
@@ -522,23 +522,13 @@ def complexity(
 
 
 def play(*, mode: str, host: str, port: int, output: TextIO) -> int:
-    """Launch the optional web server without importing it for other commands."""
+    """Launch the optional local workstation without importing it elsewhere."""
 
     if mode != interface.ConfigurationMode.LITE.value:
         raise ValueError("the browser interface supports only Stockpile Lite")
-    try:
-        from .web import run_server
-    except ModuleNotFoundError as error:
-        if error.name in {"fastapi", "uvicorn"}:
-            print(
-                "Browser play requires the optional web dependencies; "
-                "install requirements-web.txt.",
-                file=output,
-            )
-            return 2
-        raise
-    run_server(host=host, port=port)
-    return 0
+    from .web import run_trainer
+
+    return int(run_trainer(host=host, port=port, output=output))
 
 
 def _analysis_source(arguments: argparse.Namespace) -> Path:

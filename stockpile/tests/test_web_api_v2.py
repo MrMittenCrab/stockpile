@@ -14,11 +14,28 @@ from stockpile.web.policy import RandomComputerPolicy
 try:
     from fastapi.testclient import TestClient
     from stockpile.web.app import create_app
+    from stockpile.web.sessions import SessionError
     from stockpile.web.v2_sessions import V2SessionStore
 except ImportError:  # Core-only installations intentionally omit web extras.
     TestClient = None  # type: ignore[assignment,misc]
     create_app = None  # type: ignore[assignment]
+    SessionError = None  # type: ignore[assignment,misc]
     V2SessionStore = None  # type: ignore[assignment,misc]
+
+
+def _apply_for_test(session, state, player_id: int, action_id: int):  # type: ignore[no-untyped-def]
+    _information, legal = platform.observe_game_state(
+        session.rule_set, state, player_id
+    )
+    next_state, _record, report = platform.advance_game(
+        session.rule_set,
+        state,
+        legal,
+        platform.ActionRequest(player_id=player_id, action_id=action_id),
+    )
+    if not report.valid:
+        raise AssertionError(report.errors)
+    return next_state
 
 
 class RandomComputerPolicyTest(unittest.TestCase):
@@ -103,6 +120,13 @@ class WebApiV2Test(unittest.TestCase):
             json={"plan_id": plan_id, "expected_revision": view["revision"]},
         )
 
+    def submit_decision(self, game_id: str, token: str, view: dict, plan_id: str):
+        return self.client.post(
+            f"/api/v2/games/{game_id}/decisions",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"plan_id": plan_id, "expected_revision": view["revision"]},
+        )
+
     def acknowledge(self, game_id: str, token: str, view: dict):
         checkpoint = view["checkpoint"]
         self.assertIsNotNone(checkpoint)
@@ -125,13 +149,20 @@ class WebApiV2Test(unittest.TestCase):
                 view,
                 view["supply_batch"]["plans"][0]["plan_id"],
             )
+        elif view["decision_batch"] is not None:
+            response = self.submit_decision(
+                game_id,
+                token,
+                view,
+                view["decision_batch"]["plans"][0]["plan_id"],
+            )
         elif view["legal_actions"]:
             response = self.submit_action(
                 game_id, token, view, view["legal_actions"][0]["action_id"]
             )
         else:
             self.fail(
-                "non-terminal V2 view offered no human action, Supply plan, or "
+                "non-terminal V2 view offered no human action, atomic plan, or "
                 f"checkpoint: {view['phase']} / {view['phase_step']}"
             )
         self.assertEqual(response.status_code, 200, response.text)
@@ -202,7 +233,6 @@ class WebApiV2Test(unittest.TestCase):
             [
                 ("dividends", False),
                 ("trading_fees", False),
-                ("market_impact", False),
                 ("sell_order", False),
             ],
         )
@@ -429,6 +459,118 @@ class WebApiV2Test(unittest.TestCase):
             statuses = sorted(executor.map(lambda _value: post_once(), range(2)))
         self.assertEqual(statuses, [200, 409])
 
+    def test_demand_decision_is_one_atomic_browser_action_with_engine_history(self) -> None:
+        game_id, token, _payload = self.create_game(seed=23)
+        demand = self.drive_until(
+            game_id,
+            token,
+            lambda item: item["decision_batch"] is not None
+            and item["decision_batch"]["kind"] == "demand",
+        )
+        self.assertEqual(demand["legal_actions"], [])
+        plans = demand["decision_batch"]["plans"]
+        self.assertTrue(plans)
+        self.assertTrue(
+            all(
+                set(plan)
+                == {
+                    "plan_id",
+                    "stockpile_id",
+                    "amount_thousands",
+                    "marker_index",
+                }
+                for plan in plans
+            )
+        )
+        session = self.store.get(game_id)
+        snapshot = self._engine_snapshot(session)
+        raw_first_action = int(session.state.legal_actions(0)[0])
+        rejected = self.submit_action(game_id, token, demand, raw_first_action)
+        self.assertEqual(rejected.status_code, 422)
+        self.assertEqual(
+            rejected.json()["error"]["code"], "decision_plan_required"
+        )
+        invalid = self.submit_decision(game_id, token, demand, "not-a-plan")
+        self.assertEqual(invalid.status_code, 422)
+        self.assertEqual(invalid.json()["error"]["code"], "invalid_decision_plan")
+        self.assertEqual(self._engine_snapshot(session), snapshot)
+
+        selected = plans[0]
+        record = session.decision_plans[selected["plan_id"]]
+        expected = session.state
+        expected_stages: list[str] = []
+        for action_id in record.action_ids:
+            expected_stages.append(expected.stage)
+            expected = _apply_for_test(session, expected, 0, action_id)
+        self.assertEqual(expected_stages, ["demand_pile", "demand_bid"])
+        prior_sequence = len(session.state.history_records)
+        accepted = self.submit_decision(
+            game_id, token, demand, selected["plan_id"]
+        )
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        human_records = [
+            item
+            for item in session.state.history_records[prior_sequence:]
+            if item["player"] == 0
+        ]
+        self.assertEqual(
+            [item["stage"] for item in human_records[:2]], expected_stages
+        )
+        self.assertEqual(
+            [item["action"] for item in human_records[:2]], list(record.action_ids)
+        )
+        self.assertEqual(accepted.json()["revision"], demand["revision"] + 1)
+        stale = self.submit_decision(
+            game_id, token, demand, selected["plan_id"]
+        )
+        self.assertEqual(stale.status_code, 409)
+        self.assertEqual(stale.json()["error"]["code"], "stale_revision")
+
+    def test_market_impact_decision_is_atomic_and_moves_authoritative_price(self) -> None:
+        game_id, token, _payload = self.create_game(
+            options={
+                "market_impact": True,
+                "trading_fees": True,
+                "dividends": True,
+                "sell_order": True,
+            },
+            seed=2,
+        )
+        impact = self.drive_until(
+            game_id,
+            token,
+            lambda item: item["decision_batch"] is not None
+            and item["decision_batch"]["kind"] == "market_impact",
+            limit=4_000,
+        )
+        self.assertEqual(impact["legal_actions"], [])
+        selected = impact["decision_batch"]["plans"][0]
+        self.assertEqual(abs(selected["movement"]), 2)
+        session = self.store.get(game_id)
+        record = session.decision_plans[selected["plan_id"]]
+        before_price = session.state._company_price(selected["company_id"])
+        before_history = len(session.state.history_records)
+        response = self.submit_decision(
+            game_id, token, impact, selected["plan_id"]
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(
+            session.state._company_price(selected["company_id"]),
+            before_price + selected["movement"],
+        )
+        human_records = [
+            item
+            for item in session.state.history_records[before_history:]
+            if item["player"] == 0
+        ]
+        self.assertEqual(
+            [item["stage"] for item in human_records[:2]],
+            ["action_direction", "action_company"],
+        )
+        self.assertEqual(
+            [item["action"] for item in human_records[:2]], list(record.action_ids)
+        )
+
     def test_ordered_piles_interleave_and_redact_face_down_cards(self) -> None:
         game_id, token, _payload = self.create_game(seed=23)
         first = self.view(game_id, token)
@@ -575,6 +717,66 @@ class WebApiV2Test(unittest.TestCase):
         self.assertEqual(wrong_ack.json()["error"]["code"], "stale_checkpoint")
         self.assertEqual(self.view(game_id, token), checkpoint)
 
+    def test_resolved_auction_snapshot_persists_until_round_acknowledgement(self) -> None:
+        game_id, token, _payload = self.create_game(seed=23)
+        demand_result = self.drive_until(
+            game_id,
+            token,
+            lambda item: item["checkpoint"] is not None
+            and item["checkpoint"]["kind"] == "demand_result",
+        )
+        resolved = demand_result["stockpiles"]
+        self.assertEqual(len(resolved), 4)
+        self.assertTrue(all(pile["resolved"] for pile in resolved))
+        self.assertTrue(all(pile["locked"] for pile in resolved))
+        self.assertTrue(all(pile["bid"] is not None for pile in resolved))
+        self.assertTrue(all(pile["purchaser_id"] in {0, 1} for pile in resolved))
+        self.assertEqual(
+            Counter(pile["purchaser_id"] for pile in resolved), Counter({0: 2, 1: 2})
+        )
+        self.assertEqual(
+            len({pile["stockpile_id"] for pile in resolved}), 4
+        )
+        hidden = [
+            card
+            for pile in resolved
+            for card in pile["cards_bottom_to_top"]
+            if card["visibility"] == "hidden"
+        ]
+        self.assertTrue(all(card == {"visibility": "hidden"} for card in hidden))
+        for pile in resolved:
+            if pile["purchaser_id"] == 0:
+                self.assertTrue(
+                    all(
+                        card["visibility"] != "hidden"
+                        for card in pile["cards_bottom_to_top"]
+                    )
+                )
+        final_markers = {
+            (marker["player_id"], marker["marker_index"])
+            for player in demand_result["players"]
+            for marker in player["bid_markers"]
+            if marker["status"] == "locked"
+        }
+        self.assertEqual(final_markers, {(0, 0), (0, 1), (1, 0), (1, 1)})
+
+        acknowledged = self.acknowledge(game_id, token, demand_result)
+        self.assertEqual(acknowledged.status_code, 200, acknowledged.text)
+        after_demand = acknowledged.json()
+        self.assertEqual(after_demand["stockpiles"], resolved)
+        round_result = self.drive_until(
+            game_id,
+            token,
+            lambda item: item["checkpoint"] is not None
+            and item["checkpoint"]["kind"] == "round_result",
+        )
+        self.assertEqual(round_result["stockpiles"], resolved)
+        next_round_response = self.acknowledge(game_id, token, round_result)
+        self.assertEqual(next_round_response.status_code, 200, next_round_response.text)
+        next_round = next_round_response.json()
+        self.assertTrue(all(not pile["resolved"] for pile in next_round["stockpiles"]))
+        self.assertNotEqual(next_round["stockpiles"], resolved)
+
     def test_concurrent_acknowledgement_is_serialized(self) -> None:
         game_id, token, _payload = self.create_game(seed=23)
         checkpoint = self.drive_until(
@@ -592,21 +794,23 @@ class WebApiV2Test(unittest.TestCase):
 
     def test_illegal_and_stale_generic_actions_do_not_mutate_state(self) -> None:
         game_id, token, _payload = self.create_game(seed=23)
-        demand = self.drive_until(
+        decision = self.drive_until(
             game_id,
             token,
-            lambda item: item["phase"] == "demand" and bool(item["legal_actions"]),
+            lambda item: bool(item["legal_actions"])
+            and item["supply_batch"] is None
+            and item["decision_batch"] is None,
         )
         session = self.store.get(game_id)
         snapshot = self._engine_snapshot(session)
-        illegal = self.submit_action(game_id, token, demand, 999_999)
+        illegal = self.submit_action(game_id, token, decision, 999_999)
         self.assertEqual(illegal.status_code, 422)
         self.assertEqual(illegal.json()["error"]["code"], "illegal_action")
         self.assertEqual(self._engine_snapshot(session), snapshot)
-        action_id = demand["legal_actions"][0]["action_id"]
-        accepted = self.submit_action(game_id, token, demand, action_id)
+        action_id = decision["legal_actions"][0]["action_id"]
+        accepted = self.submit_action(game_id, token, decision, action_id)
         self.assertEqual(accepted.status_code, 200, accepted.text)
-        stale = self.submit_action(game_id, token, demand, action_id)
+        stale = self.submit_action(game_id, token, decision, action_id)
         self.assertEqual(stale.status_code, 409)
         self.assertEqual(stale.json()["error"]["code"], "stale_revision")
 
@@ -680,6 +884,129 @@ class WebApiV2Test(unittest.TestCase):
             ),
         )
         self.assertNotIn("position_value_thousands", after["players"][1])
+
+    def test_sell_actions_are_deduplicated_and_prefer_cursor_advancement(self) -> None:
+        game_id, token, _payload = self.create_game(
+            options={"sell_order": True}, seed=23
+        )
+        session = self.store.get(game_id)
+        current = self.view(game_id, token)
+        found_duplicate = False
+        for _step in range(2_000):
+            if (
+                current["phase"] == "selling"
+                and current["legal_actions"]
+                and session.state.current_player() == 0
+            ):
+                _information, raw = platform.observe_game_state(
+                    session.rule_set, session.state, 0
+                )
+                raw_groups: dict[tuple[int, int, int, int], list[int]] = {}
+                for action in raw:
+                    preview = platform.preview_sale_action(
+                        session.rule_set, session.state, 0, action.action_id
+                    )
+                    key = (
+                        preview.company_id,
+                        preview.quantity_sold,
+                        preview.gross_value,
+                        preview.resulting_represented,
+                    )
+                    raw_groups.setdefault(key, []).append(action.action_id)
+                projected_keys = [
+                    (
+                        action["sale_preview"]["company_id"],
+                        action["sale_preview"]["shares_thousands"],
+                        action["sale_preview"]["gross_value_thousands"],
+                        action["sale_preview"]["resulting_shares_thousands"],
+                    )
+                    for action in current["legal_actions"]
+                ]
+                self.assertEqual(len(projected_keys), len(set(projected_keys)))
+                duplicates = {
+                    key: ids for key, ids in raw_groups.items() if len(ids) > 1
+                }
+                if duplicates:
+                    found_duplicate = True
+                    canonical_ids = {
+                        action["action_id"] for action in current["legal_actions"]
+                    }
+                    for key in duplicates:
+                        projected = next(
+                            action
+                            for action in current["legal_actions"]
+                            if (
+                                action["sale_preview"]["company_id"],
+                                action["sale_preview"]["shares_thousands"],
+                                action["sale_preview"]["gross_value_thousands"],
+                                action["sale_preview"]["resulting_shares_thousands"],
+                            )
+                            == key
+                        )
+                        before_cursor = (
+                            session.state.phase,
+                            int(session.state.current_player()),
+                            int(session.state._selling_company),
+                        )
+                        after = _apply_for_test(
+                            session,
+                            session.state,
+                            0,
+                            projected["action_id"],
+                        )
+                        after_cursor = (
+                            after.phase,
+                            int(after.current_player()),
+                            int(after._selling_company),
+                        )
+                        self.assertNotEqual(after_cursor, before_cursor)
+                        hidden_equivalent = next(
+                            action_id
+                            for action_id in duplicates[key]
+                            if action_id not in canonical_ids
+                        )
+                        rejected = self.submit_action(
+                            game_id, token, current, hidden_equivalent
+                        )
+                        self.assertEqual(rejected.status_code, 422)
+                        self.assertEqual(
+                            rejected.json()["error"]["code"], "illegal_action"
+                        )
+                    break
+            if current["terminal_results"] is not None:
+                break
+            current = self.advance_once(game_id, token, current)
+        self.assertTrue(found_duplicate, "seed did not exercise duplicate sell actions")
+
+    def test_resignation_is_authoritative_stale_safe_and_closes_queued_references(self) -> None:
+        game_id, token, _payload = self.create_game(seed=23)
+        view = self.view(game_id, token)
+        session = self.store.get(game_id)
+        stale = self.client.post(
+            f"/api/v2/games/{game_id}/resignations",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"expected_revision": view["revision"] + 1},
+        )
+        self.assertEqual(stale.status_code, 409)
+        self.assertEqual(stale.json()["error"]["code"], "stale_revision")
+        self.assertFalse(session.closed)
+        self.assertEqual(self.view(game_id, token), view)
+
+        resigned = self.client.post(
+            f"/api/v2/games/{game_id}/resignations",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"expected_revision": view["revision"]},
+        )
+        self.assertEqual(resigned.status_code, 204, resigned.text)
+        self.assertEqual(resigned.content, b"")
+        self.assertEqual(resigned.headers["cache-control"], "no-store")
+        self.assertTrue(session.closed)
+        missing = self.view_response(game_id, token)
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(missing.json()["error"]["code"], "game_not_found")
+        with self.assertRaises(SessionError) as context:
+            self.store.view(session)
+        self.assertEqual(context.exception.code, "game_closed")
 
     def test_complete_default_and_all_options_games_include_every_checkpoint(self) -> None:
         for options, seed in (

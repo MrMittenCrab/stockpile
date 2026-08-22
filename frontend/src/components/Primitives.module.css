@@ -1,6 +1,7 @@
 .button {
   appearance: none;
-  min-width: 88px;
+  flex: none;
+  width: 144px;
   height: 36px;
   padding: 0 14px;
   border: 1px solid var(--black);
@@ -43,13 +44,12 @@
   display: grid;
   place-items: center;
   overflow: hidden;
-  aspect-ratio: 3 / 4;
   border: 1px solid var(--black);
   color: var(--black);
   background: var(--white);
 }
 
-.stockpile { width: clamp(104px, 10vw, 150px); }
-.active { width: 84px; }
+.stockpile { width: 104px; height: 139px; }
+.active,
 .portfolio,
-.information { width: 54px; }
+.information { width: 54px; height: 72px; }

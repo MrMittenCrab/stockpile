@@ -38,4 +38,12 @@ def run_server(*, host: str = "127.0.0.1", port: int = 8000) -> None:
     uvicorn.run(factory(), host=host, port=port, reload=False, workers=1)
 
 
-__all__ = ["create_app", "run_server"]
+def run_trainer(*args, **kwargs):  # type: ignore[no-untyped-def]
+    """Lazily supervise the local API and Vite workstation."""
+
+    from .launcher import run_trainer as supervisor
+
+    return supervisor(*args, **kwargs)
+
+
+__all__ = ["create_app", "run_server", "run_trainer"]

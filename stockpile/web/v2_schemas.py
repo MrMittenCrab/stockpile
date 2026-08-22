@@ -60,8 +60,17 @@ class SupplyRequestV2(StrictModelV2):
     expected_revision: int = Field(ge=0)
 
 
+class DecisionRequestV2(StrictModelV2):
+    plan_id: str = Field(min_length=1, max_length=128)
+    expected_revision: int = Field(ge=0)
+
+
 class AcknowledgementRequestV2(StrictModelV2):
     checkpoint_id: str = Field(min_length=1, max_length=128)
+    expected_revision: int = Field(ge=0)
+
+
+class ResignationRequestV2(StrictModelV2):
     expected_revision: int = Field(ge=0)
 
 
@@ -148,6 +157,7 @@ class StockpileV2(StrictModelV2):
     bid: StockpileBidV2 | None = None
     locked: bool
     purchaser_id: int | None = None
+    resolved: bool
 
 
 class HumanPublicPlayerV2(StrictModelV2):
@@ -238,6 +248,33 @@ class SupplyPlanV2(StrictModelV2):
 class SupplyBatchV2(StrictModelV2):
     cards: list[SupplyCardV2]
     plans: list[SupplyPlanV2]
+
+
+class DemandDecisionPlanV2(StrictModelV2):
+    plan_id: str
+    stockpile_id: int
+    amount_thousands: int
+    marker_index: int
+
+
+class DemandDecisionBatchV2(StrictModelV2):
+    kind: Literal["demand"] = "demand"
+    plans: list[DemandDecisionPlanV2]
+
+
+class MarketImpactDecisionPlanV2(StrictModelV2):
+    plan_id: str
+    direction: Literal["up", "down"]
+    company_id: int
+    movement: int
+
+
+class MarketImpactDecisionBatchV2(StrictModelV2):
+    kind: Literal["market_impact"] = "market_impact"
+    plans: list[MarketImpactDecisionPlanV2]
+
+
+DecisionBatchV2 = DemandDecisionBatchV2 | MarketImpactDecisionBatchV2
 
 
 class PendingDecisionV2(StrictModelV2):
@@ -336,6 +373,7 @@ class GameViewV2(StrictModelV2):
     pending_decision: PendingDecisionV2
     legal_actions: list[LegalActionV2]
     supply_batch: SupplyBatchV2 | None = None
+    decision_batch: DecisionBatchV2 | None = None
     checkpoint: PresentationCheckpointV2 | None = None
     recent_events: list[PublicEventV2]
     terminal_results: TerminalResultsV2 | None = None

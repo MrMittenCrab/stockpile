@@ -3,6 +3,8 @@ import {
   acknowledgeCheckpoint,
   ApiError,
   getGameView,
+  resignGame,
+  submitDecisionPlan,
   submitGameAction,
   submitSupplyPlan,
 } from "./api";
@@ -59,18 +61,20 @@ export function useGameSession(gameId: string, token: string) {
 
   const submit = useCallback(
     async (operation: (revision: number) => Promise<GameView>) => {
-      if (!view || submitting) return;
+      if (!view || submitting) return null;
       setSubmitting(true);
       setError(null);
       try {
         const next = await operation(view.revision);
         setView(next);
+        return next;
       } catch (cause) {
         if (cause instanceof ApiError && cause.status === 409) {
           await refresh();
         } else {
           setError(cause instanceof Error ? cause.message : "Action was not accepted");
         }
+        return null;
       } finally {
         setSubmitting(false);
       }
@@ -86,10 +90,30 @@ export function useGameSession(gameId: string, token: string) {
     (planId: string) => submit((revision) => submitSupplyPlan(gameId, token, planId, revision)),
     [gameId, submit, token],
   );
+  const decision = useCallback(
+    (planId: string) => submit((revision) => submitDecisionPlan(gameId, token, planId, revision)),
+    [gameId, submit, token],
+  );
   const acknowledge = useCallback(
     (checkpointId: string) => submit((revision) => acknowledgeCheckpoint(gameId, token, checkpointId, revision)),
     [gameId, submit, token],
   );
 
-  return { view, error, submitting, act, supply, acknowledge, refresh };
+  const resign = useCallback(async () => {
+    if (!view || submitting) return false;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await resignGame(gameId, token, view.revision);
+      return true;
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 409) await refresh();
+      else setError(cause instanceof Error ? cause.message : "Resignation was not accepted");
+      return false;
+    } finally {
+      setSubmitting(false);
+    }
+  }, [gameId, refresh, submitting, token, view]);
+
+  return { view, error, submitting, act, supply, decision, acknowledge, resign, refresh };
 }

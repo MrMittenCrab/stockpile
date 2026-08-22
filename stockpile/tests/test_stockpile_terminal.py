@@ -630,15 +630,16 @@ class TerminalTests(unittest.TestCase):
         self.assertIn("Information sets: 12", rendered)
         self.assertNotIn("Information sets: >=", rendered)
 
-    def test_play_lazily_launches_the_loopback_web_server(self):
+    def test_play_lazily_launches_the_complete_local_trainer(self):
         output = StringIO()
-        calls: list[tuple[str, int]] = []
+        calls: list[tuple[str, int, object]] = []
         web_module = ModuleType("stockpile.web")
 
-        def run_server(*, host: str, port: int) -> None:
-            calls.append((host, port))
+        def run_trainer(*, host: str, port: int, output: object) -> int:
+            calls.append((host, port, output))
+            return 0
 
-        web_module.run_server = run_server
+        web_module.run_trainer = run_trainer
         with patch.dict(sys.modules, {"stockpile.web": web_module}):
             status = terminal.main(
                 [
@@ -654,7 +655,48 @@ class TerminalTests(unittest.TestCase):
             )
         self.assertEqual(status, 0)
         self.assertEqual(output.getvalue(), "")
-        self.assertEqual(calls, [("localhost", 8123)])
+        self.assertEqual(calls, [("localhost", 8123, output)])
+
+    def test_play_defaults_to_lite_and_canonical_loopback_ports(self):
+        output = StringIO()
+        calls: list[tuple[str, int, object]] = []
+        web_module = ModuleType("stockpile.web")
+
+        def run_trainer(*, host: str, port: int, output: object) -> int:
+            calls.append((host, port, output))
+            return 130
+
+        web_module.run_trainer = run_trainer
+        with patch.dict(sys.modules, {"stockpile.web": web_module}):
+            status = terminal.main(["play"], output=output)
+
+        self.assertEqual(status, 130)
+        self.assertEqual(output.getvalue(), "")
+        self.assertEqual(calls, [("127.0.0.1", 8000, output)])
+
+    def test_play_reports_a_child_failure_without_a_traceback(self):
+        web_module = ModuleType("stockpile.web")
+
+        def run_trainer(*, host: str, port: int, output: object) -> int:
+            del host, port, output
+            raise RuntimeError(
+                "Stockpile frontend exited before readiness with status 1"
+            )
+
+        web_module.run_trainer = run_trainer
+        stderr = StringIO()
+        with (
+            patch.dict(sys.modules, {"stockpile.web": web_module}),
+            redirect_stderr(stderr),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            terminal.main(["play"], output=StringIO())
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn(
+            "frontend exited before readiness with status 1", stderr.getvalue()
+        )
+        self.assertNotIn("Traceback", stderr.getvalue())
 
     def test_solve_rejects_games_outside_the_supported_lite_contract(self):
         cases = (
@@ -1018,11 +1060,10 @@ class TerminalTests(unittest.TestCase):
                 self.assertIn(str(error), rendered)
                 self.assertNotIn("Traceback", rendered)
 
-    def test_mode_is_required_and_invalid_values_fail_in_argparse(self):
+    def test_configuration_mode_is_required_and_invalid_values_fail_in_argparse(self):
         invalid_commands = (
             ["rules"],
             ["complexity"],
-            ["play"],
             ["play", "--mode", "classic"],
             ["play", "--mode", "lite", "--host", "0.0.0.0"],
             ["play", "--mode", "lite", "--port", "0"],

@@ -61,9 +61,10 @@ export interface BidMarker {
 export interface Stockpile {
   stockpile_id: number;
   cards_bottom_to_top: PileCard[];
-  bid: { player_id: number; amount_thousands: number } | null;
+  bid: { player_id: number; marker_index: number; amount_thousands: number } | null;
   locked: boolean;
   purchaser_id: number | null;
+  resolved: boolean;
 }
 export interface PublicPlayerBase {
   player_id: number;
@@ -129,6 +130,25 @@ export interface SupplyBatch {
   cards: Array<{ card_ref: string; card: VisibleCard }>;
   plans: Array<{ plan_id: string; placements: SupplyPlacement[] }>;
 }
+export interface DemandDecisionBatch {
+  kind: "demand";
+  plans: Array<{
+    plan_id: string;
+    stockpile_id: number;
+    amount_thousands: number;
+    marker_index: number;
+  }>;
+}
+export interface MarketImpactDecisionBatch {
+  kind: "market_impact";
+  plans: Array<{
+    plan_id: string;
+    direction: "up" | "down";
+    company_id: number;
+    movement: number;
+  }>;
+}
+export type DecisionBatch = DemandDecisionBatch | MarketImpactDecisionBatch;
 export interface PresentationCheckpoint {
   checkpoint_id: string;
   kind: "demand_result" | "round_result";
@@ -189,6 +209,7 @@ export interface GameView {
   pending_decision: PendingDecision;
   legal_actions: LegalAction[];
   supply_batch: SupplyBatch | null;
+  decision_batch: DecisionBatch | null;
   checkpoint: PresentationCheckpoint | null;
   recent_events: MarketEvent[];
   terminal_results: TerminalResult | null;

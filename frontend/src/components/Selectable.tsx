@@ -16,6 +16,7 @@ export function Selectable({
   return (
     <button
       type="button"
+      aria-pressed={selected === undefined ? undefined : selected}
       className={`${styles.selectable} ${selected ? styles.selected : ""} ${className}`}
       {...props}
     >

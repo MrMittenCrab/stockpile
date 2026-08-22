@@ -7,7 +7,6 @@ export const setupResponse: SetupResponse = {
   mode: "lite",
   round_count: 6,
   options: [
-    { key: "market_impact", label: "Market Impact", default: false },
     { key: "trading_fees", label: "Trading Fees", default: false },
     { key: "dividends", label: "Dividends", default: false },
     { key: "sell_order", label: "Sell Order", default: false },
@@ -42,9 +41,10 @@ export const gameView: GameView = {
         { visibility: "hidden" },
         { visibility: "visible", kind: "trading_fee", cash_effect_thousands: -4 },
       ],
-      bid: { player_id: 0, amount_thousands: 10 },
+      bid: { player_id: 0, marker_index: 0, amount_thousands: 10 },
       locked: false,
       purchaser_id: null,
+      resolved: false,
     },
     {
       stockpile_id: 1,
@@ -52,6 +52,7 @@ export const gameView: GameView = {
       bid: null,
       locked: false,
       purchaser_id: null,
+      resolved: false,
     },
     ...Array.from({ length: 3 }, (_, offset) => ({
       stockpile_id: offset + 2,
@@ -59,6 +60,7 @@ export const gameView: GameView = {
       bid: null,
       locked: false,
       purchaser_id: null,
+      resolved: false,
     })),
   ],
   players: [
@@ -96,9 +98,12 @@ export const gameView: GameView = {
     holdings: [{ company_id: 0, company: "Cosmic Computers", shares_thousands: 3, price_dollars_per_share: 47, market_value_thousands: 141 }],
     available_action_cards: [],
   },
-  pending_decision: { kind: "bid_amount", prompt: "Choose a legal bid", selected_stockpile_id: 4, selected_action_effect: null, company_id: null },
-  legal_actions: [{ action_id: 9123, control: "bid", label: "Bid 37K", target_id: null, amount_thousands: 37, direction: null, sale_preview: null }],
+  pending_decision: { kind: "bid_pile", prompt: "Choose a legal stockpile", selected_stockpile_id: null, selected_action_effect: null, company_id: null },
+  legal_actions: [],
   supply_batch: null,
+  decision_batch: { kind: "demand", plans: [
+    { plan_id: "bid-37", stockpile_id: 4, amount_thousands: 37, marker_index: 1 },
+  ] },
   checkpoint: null,
   recent_events: [
     { event_id: 1, event_type: "market_movement", cause: "market_forecast", round: 3, company_id: 0, prior_price_dollars_per_share: 45, price_delta: 2, resulting_price_dollars_per_share: 47, forecast: 2, cash_effect_thousands: null, direction: "up" },
@@ -112,5 +117,7 @@ export const server = setupServer(
   http.get("/api/v2/games/:id/view", () => HttpResponse.json(gameView)),
   http.post("/api/v2/games/:id/actions", () => HttpResponse.json({ ...gameView, revision: 8 })),
   http.post("/api/v2/games/:id/supply", () => HttpResponse.json({ ...gameView, revision: 8 })),
+  http.post("/api/v2/games/:id/decisions", () => HttpResponse.json({ ...gameView, revision: 8 })),
   http.post("/api/v2/games/:id/acknowledgements", () => HttpResponse.json({ ...gameView, revision: 8, checkpoint: null })),
+  http.post("/api/v2/games/:id/resignations", () => new HttpResponse(null, { status: 204 })),
 );

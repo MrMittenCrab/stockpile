@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import FastAPI, Header, Request, status
+from fastapi import FastAPI, Header, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -30,8 +30,10 @@ from .v2_schemas import (
     ActionRequestV2,
     CreateGameRequestV2,
     CreateGameResponseV2,
+    DecisionRequestV2,
     GameViewV2,
     OptionDescriptorV2,
+    ResignationRequestV2,
     SetupResponseV2,
     SupplyRequestV2,
 )
@@ -224,9 +226,6 @@ def create_app(
                     key="trading_fees", label="FEES", default=defaults.fees
                 ),
                 OptionDescriptorV2(
-                    key="market_impact", label="IMPACT", default=defaults.impact
-                ),
-                OptionDescriptorV2(
                     key="sell_order", label="SELL ORDER", default=defaults.sell_order
                 ),
             ]
@@ -274,6 +273,19 @@ def create_app(
             expected_revision=request.expected_revision,
         )
 
+    @app.post("/api/v2/games/{game_id}/decisions", response_model=GameViewV2)
+    def submit_decision_v2(
+        game_id: str,
+        request: DecisionRequestV2,
+        authorization: str | None = Header(default=None),
+    ) -> GameViewV2:
+        session = browser_sessions.authenticate(game_id, _bearer_token(authorization))
+        return browser_sessions.decide(
+            session,
+            plan_id=request.plan_id,
+            expected_revision=request.expected_revision,
+        )
+
     @app.post(
         "/api/v2/games/{game_id}/acknowledgements", response_model=GameViewV2
     )
@@ -288,6 +300,22 @@ def create_app(
             checkpoint_id=request.checkpoint_id,
             expected_revision=request.expected_revision,
         )
+
+    @app.post(
+        "/api/v2/games/{game_id}/resignations",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    def resign_v2(
+        game_id: str,
+        request: ResignationRequestV2,
+        authorization: str | None = Header(default=None),
+    ) -> Response:
+        session = browser_sessions.authenticate(game_id, _bearer_token(authorization))
+        browser_sessions.resign(
+            session,
+            expected_revision=request.expected_revision,
+        )
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     return app
 

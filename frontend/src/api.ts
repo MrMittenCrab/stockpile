@@ -35,6 +35,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
       failure?.error.code ?? "request_failed",
     );
   }
+  if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
 
@@ -85,6 +86,18 @@ export const submitSupplyPlan = (
     body: JSON.stringify({ plan_id: planId, expected_revision: expectedRevision }),
   });
 
+export const submitDecisionPlan = (
+  gameId: string,
+  token: string,
+  planId: string,
+  expectedRevision: number,
+) =>
+  request<GameView>(`/api/v2/games/${encodeURIComponent(gameId)}/decisions`, {
+    method: "POST",
+    headers: authorized(token),
+    body: JSON.stringify({ plan_id: planId, expected_revision: expectedRevision }),
+  });
+
 export const acknowledgeCheckpoint = (
   gameId: string,
   token: string,
@@ -97,7 +110,22 @@ export const acknowledgeCheckpoint = (
     body: JSON.stringify({ checkpoint_id: checkpointId, expected_revision: expectedRevision }),
   });
 
+export const resignGame = (
+  gameId: string,
+  token: string,
+  expectedRevision: number,
+) =>
+  request<void>(`/api/v2/games/${encodeURIComponent(gameId)}/resignations`, {
+    method: "POST",
+    headers: authorized(token),
+    body: JSON.stringify({ expected_revision: expectedRevision }),
+  });
+
 export const seatStorageKey = (gameId: string) => `stockpile.seatToken:${gameId}`;
+
+export function clearSeatToken(gameId: string) {
+  sessionStorage.removeItem(seatStorageKey(gameId));
+}
 
 export function claimFragmentToken(gameId: string): string | null {
   const fragment = new URLSearchParams(window.location.hash.replace(/^#/, ""));

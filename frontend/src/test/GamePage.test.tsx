@@ -1,7 +1,8 @@
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { seatStorageKey } from "../api";
 import { GamePage } from "../components/GamePage";
 import gameCss from "../components/Game.module.css?raw";
 import primitiveCss from "../components/Primitives.module.css?raw";
@@ -11,29 +12,31 @@ import { gameView, server } from "./server";
 
 afterEach(cleanup);
 
-describe("disciplined Stockpile Lite game surface", () => {
-  it("uses the canonical flat two-size visual grammar", () => {
+function action(id: number, label: string) {
+  return { action_id: id, control: "dividend" as const, label, target_id: null, amount_thousands: null, direction: null, sale_preview: null };
+}
+
+describe("disciplined Stockpile Trainer game surface", () => {
+  it("uses only the canonical flat two-size visual grammar and exact object sizes", () => {
     const css = `${globalCss}\n${primitiveCss}\n${gameCss}`;
     expect(css).not.toMatch(/gradient|box-shadow|text-shadow|border-radius\s*:\s*[^0]|font-style\s*:\s*italic|ochre|opacity\s*:/i);
     expect(new Set(Array.from(css.matchAll(/font-size:\s*var\(--([a-z-]+-size)/g), (match) => match[1]))).toEqual(new Set(["primary-size", "secondary-size"]));
     expect(new Set(Array.from(css.matchAll(/font-weight:\s*([^;}]+)/g), (match) => match[1].trim()))).toEqual(new Set(["400"]));
     expect(globalCss).toContain("--blue: #002fa7");
     expect(globalCss).toContain("--grey: #70747a");
-    expect(globalCss).toContain("background: #ffffff");
+    expect(primitiveCss).toMatch(/\.stockpile\s*\{\s*width:\s*104px;\s*height:\s*139px;/);
+    expect(primitiveCss).toMatch(/\.active,[^}]*\.portfolio,[^}]*\.information\s*\{\s*width:\s*54px;\s*height:\s*72px;/s);
+    expect(gameCss).toContain(".selected { transform: translateY(-4px); }");
+    expect(gameCss).toMatch(/\.hiddenCard\s*\{[^}]*background:\s*var\(--blue\)/s);
+    expect(gameCss).toContain("grid-template-columns: minmax(0, 74px) minmax(0, 1fr)");
+    expect(gameCss).toMatch(/\.dockControls\s*\{[^}]*gap:\s*8px;/s);
   });
 
-  it("renders server units, financial labels, unusual prices, piles, and bids", async () => {
-    let submitted: unknown;
-    server.use(http.post("/api/v2/games/unusual/actions", async ({ request }) => {
-      submitted = await request.json();
-      return HttpResponse.json({ ...gameView, revision: 8, legal_actions: [] });
-    }));
+  it("renders explicit units and keeps every fact in its canonical section", async () => {
     render(<GamePage gameId="unusual" token="seat-secret" />);
-
     const market = await screen.findByLabelText("Market");
     expect(within(market).getByText("$47 / SHARE")).toBeInTheDocument();
     expect(within(market).getByText("$11 / SHARE")).toBeInTheDocument();
-    expect(within(market).queryByText("↑2")).not.toBeInTheDocument();
     expect(within(screen.getByLabelText("Stockpiles")).getAllByRole("article")).toHaveLength(5);
     expect(within(screen.getByLabelText("Portfolio")).getByText("3K")).toBeInTheDocument();
 
@@ -44,62 +47,82 @@ describe("disciplined Stockpile Lite game surface", () => {
     expect(within(players).getByText("−$9K")).toBeInTheDocument();
     expect(within(players).getByText("+$6K")).toBeInTheDocument();
     expect(within(players).queryAllByText("POSITION")).toHaveLength(1);
-
-    const bid = screen.getByRole("button", { name: "Bid 37K" });
-    expect(bid).toHaveTextContent("$37K");
-    await userEvent.click(bid);
-    await waitFor(() => expect(submitted).toEqual({ action_id: 9123, expected_revision: 7 }));
+    expect(screen.getByLabelText("Research")).toBeInTheDocument();
+    expect(screen.queryByText("PUBLIC")).not.toBeInTheDocument();
+    expect(screen.queryByText("PRIVATE")).not.toBeInTheDocument();
+    const controls = screen.getByLabelText("Action dock").querySelectorAll("[data-dock-control]");
+    expect(controls).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "BACK" })).toBeDisabled();
   });
 
-  it("preserves bottom-to-top ordering and reveals remembered identity only while expanded", async () => {
+  it("collapses ordered stacks to white/blue edges and reveals remembered cards only on double-click", async () => {
+    const user = userEvent.setup();
     render(<GamePage gameId="unusual" token="seat-secret" />);
-    const piles = await screen.findByLabelText("Stockpiles");
-    const first = within(piles).getByLabelText("Stockpile 1");
+    const field = await screen.findByLabelText("Stockpiles");
+    const first = within(field).getByLabelText("Stockpile 1");
     const layers = first.querySelectorAll("[data-stack-card]");
     expect(Array.from(layers).map((layer) => layer.getAttribute("data-stack-order"))).toEqual(["0", "1", "2"]);
+    expect(Array.from(layers).map((layer) => layer.getAttribute("data-card-edge"))).toEqual(["white", "blue", null]);
     expect(Array.from(layers).map((layer) => (layer as HTMLElement).style.zIndex)).toEqual(["1", "2", "3"]);
 
-    const remembered = within(piles).getByLabelText("Stockpile 2");
+    const remembered = within(field).getByLabelText("Stockpile 2");
+    const inspect = remembered.querySelector("[data-stack-inspect]") as HTMLElement;
+    expect(inspect).toHaveAttribute("aria-expanded", "false");
     expect(within(remembered).getByLabelText("Hidden card")).toBeInTheDocument();
-    expect(within(remembered).queryByText("FACE DOWN")).not.toBeInTheDocument();
-    const inspect = within(remembered).getByRole("button", { name: "Expand stockpile 2" });
-    await userEvent.click(inspect);
+    await user.dblClick(inspect);
     expect(inspect).toHaveAttribute("aria-expanded", "true");
     expect(within(remembered).getByLabelText("EPIC stock 1K shares")).toBeInTheDocument();
     expect(within(remembered).getByText("FACE DOWN")).toBeInTheDocument();
-    await userEvent.click(within(remembered).getByRole("button", { name: "Collapse stockpile 2" }));
-    expect(within(remembered).getByLabelText("Hidden card")).toBeInTheDocument();
+    await user.dblClick(inspect);
+    expect(inspect).toHaveAttribute("aria-expanded", "false");
+    inspect.focus();
+    await user.keyboard("{Enter}");
+    expect(inspect).toHaveAttribute("aria-expanded", "true");
+    expect(inspect).toHaveAttribute("aria-keyshortcuts", "Enter Space");
   });
 
-  it("keeps pile inspection separate from a legal pile action", async () => {
-    let submissions = 0;
-    const view: GameView = {
-      ...gameView,
-      pending_decision: { ...gameView.pending_decision, kind: "bid_pile", selected_stockpile_id: null },
-      legal_actions: [{ action_id: 55, control: "stockpile", label: "Select stockpile 1", target_id: "stockpile:0", amount_thousands: null, direction: null, sale_preview: null }],
-    };
-    server.use(
-      http.get("/api/v2/games/separate/view", () => HttpResponse.json(view)),
-      http.post("/api/v2/games/separate/actions", async () => {
-        submissions += 1;
-        return HttpResponse.json({ ...view, revision: 8 });
-      }),
-    );
-    render(<GamePage gameId="separate" token="seat-secret" />);
-    await userEvent.click(await screen.findByRole("button", { name: "Expand stockpile 1" }));
-    expect(submissions).toBe(0);
-    await userEvent.click(screen.getByRole("button", { name: "Select stockpile 1" }));
-    await waitFor(() => expect(submissions).toBe(1));
+  it("stages a Demand pile and bid, then commits one opaque decision plan", async () => {
+    let submitted: unknown;
+    server.use(http.post("/api/v2/games/unusual/decisions", async ({ request }) => {
+      submitted = await request.json();
+      return HttpResponse.json({ ...gameView, revision: 8, decision_batch: null, pending_decision: { ...gameView.pending_decision, kind: "waiting" } });
+    }));
+    const user = userEvent.setup();
+    render(<GamePage gameId="unusual" token="seat-secret" />);
+    const targetPile = await screen.findByLabelText("Stockpile 5");
+    const inspect = targetPile.querySelector("[data-stack-inspect]") as HTMLElement;
+    inspect.focus();
+    await user.keyboard("{Shift>}{Enter}{/Shift}");
+    expect(inspect).toHaveAttribute("aria-expanded", "true");
+    expect(screen.queryByRole("button", { name: "$37K" })).not.toBeInTheDocument();
+    await user.keyboard("{Enter}");
+    expect(await screen.findByRole("button", { name: "$37K" })).toBeInTheDocument();
+    const undo = screen.getByRole("button", { name: "UNDO" });
+    expect(undo).toHaveAttribute("data-context-action", "undo");
+    await user.click(undo);
+    expect(screen.queryByRole("button", { name: "$37K" })).not.toBeInTheDocument();
+    expect(submitted).toBeUndefined();
+    const target = within(targetPile).getByRole("button", { name: "Select stockpile" });
+    await user.click(target);
+    const bid = await screen.findByRole("button", { name: "$37K" });
+    await user.click(bid);
+    const confirm = screen.getByRole("button", { name: "CONFIRM" });
+    expect(confirm).toHaveAttribute("data-plan-id", "bid-37");
+    expect(submitted).toBeUndefined();
+    await user.click(confirm);
+    await waitFor(() => expect(submitted).toEqual({ plan_id: "bid-37", expected_revision: 7 }));
   });
 
-  it("arranges both Supply cards locally and submits one opaque plan on CONFIRM", async () => {
+  it("stages both Supply cards independently, whites tentative copies, supports precise undo, and confirms once", async () => {
     let submitted: unknown;
     const supplyView: GameView = {
       ...gameView,
       phase: "supply",
-      phase_step: "supply_choose_card",
+      phase_step: "supply",
       pending_decision: { kind: "supply", prompt: "Place current pair", selected_stockpile_id: null, selected_action_effect: null, company_id: null },
       legal_actions: [],
+      decision_batch: null,
+      stockpiles: gameView.stockpiles.map((pile) => ({ ...pile, cards_bottom_to_top: [], bid: null })),
       supply_batch: {
         cards: [
           { card_ref: "card-a", card: { visibility: "visible", kind: "stock", company_id: 3, company: "American Automotive", shares_thousands: 1 } },
@@ -110,13 +133,17 @@ describe("disciplined Stockpile Lite game surface", () => {
             { card_ref: "card-a", stockpile_id: 0, visibility: "face_up" },
             { card_ref: "card-b", stockpile_id: 1, visibility: "face_down" },
           ] },
-          { plan_id: "alternate", placements: [
-            { card_ref: "card-a", stockpile_id: 1, visibility: "face_down" },
-            { card_ref: "card-b", stockpile_id: 0, visibility: "face_up" },
-          ] },
-          { plan_id: "swapped", placements: [
+          { plan_id: "swapped-face", placements: [
             { card_ref: "card-a", stockpile_id: 0, visibility: "face_down" },
             { card_ref: "card-b", stockpile_id: 1, visibility: "face_up" },
+          ] },
+          { plan_id: "swapped-pile", placements: [
+            { card_ref: "card-a", stockpile_id: 1, visibility: "face_up" },
+            { card_ref: "card-b", stockpile_id: 0, visibility: "face_down" },
+          ] },
+          { plan_id: "swapped-both", placements: [
+            { card_ref: "card-a", stockpile_id: 1, visibility: "face_down" },
+            { card_ref: "card-b", stockpile_id: 0, visibility: "face_up" },
           ] },
         ],
       },
@@ -128,122 +155,225 @@ describe("disciplined Stockpile Lite game surface", () => {
         return HttpResponse.json({ ...supplyView, revision: 8, supply_batch: null, pending_decision: { ...supplyView.pending_decision, kind: "waiting" } });
       }),
     );
+    const user = userEvent.setup();
     render(<GamePage gameId="supply" token="seat-secret" />);
 
-    const first = await screen.findByRole("button", { name: "Supply card card-a" });
-    expect(screen.getByRole("button", { name: "Supply card card-b" })).toBeInTheDocument();
+    const sourceA = await screen.findByRole("button", { name: "Supply card card-a" });
+    const firstEmpty = within(screen.getByLabelText("Stockpile 1")).getByLabelText("Empty stockpile");
+    expect(firstEmpty).toHaveAttribute("data-card-scale", "stockpile");
+    expect(firstEmpty.closest("[data-empty-stockpile]")).toBeInTheDocument();
+    await user.click(sourceA);
+    await user.click(within(screen.getByLabelText("Stockpile 1")).getByRole("button", { name: "Select stockpile" }));
+    await user.click(await screen.findByRole("button", { name: "FACE UP" }));
+    expect(sourceA).toHaveAttribute("data-white-out", "true");
+    expect(document.querySelector('[data-tentative-card-ref="card-a"]')).toHaveAttribute("data-white-out", "true");
     expect(screen.queryByRole("button", { name: "CONFIRM" })).not.toBeInTheDocument();
-    await userEvent.click(first);
-    await userEvent.click(screen.getByRole("button", { name: "FACE UP" }));
-    await userEvent.click(screen.getByRole("button", { name: "Place selected card in stockpile 1" }));
-    await userEvent.click(screen.getByRole("button", { name: "Supply card card-b" }));
-    await userEvent.click(screen.getByRole("button", { name: "FACE DOWN" }));
-    await userEvent.click(screen.getByRole("button", { name: "Place selected card in stockpile 2" }));
-    expect(submitted).toBeUndefined();
+
+    await user.dblClick(sourceA);
+    expect(sourceA).not.toHaveAttribute("data-white-out");
+    expect(document.querySelector('[data-tentative-card-ref="card-a"]')).not.toBeInTheDocument();
+
+    await user.click(sourceA);
+    await user.click(within(screen.getByLabelText("Stockpile 1")).getByRole("button", { name: "Select stockpile" }));
+    await user.click(await screen.findByRole("button", { name: "FACE UP" }));
+    const sourceB = screen.getByRole("button", { name: "Supply card card-b" });
+    await user.click(sourceB);
+    await user.click(within(screen.getByLabelText("Stockpile 2")).getByRole("button", { name: "Select stockpile" }));
+    await user.click(await screen.findByRole("button", { name: "FACE DOWN" }));
 
     const confirm = screen.getByRole("button", { name: "CONFIRM" });
-    expect(confirm).toBeEnabled();
     expect(confirm).toHaveAttribute("data-plan-id", "plan-opaque");
-    await userEvent.click(first);
-    await userEvent.click(screen.getByRole("button", { name: "FACE DOWN" }));
-    expect(first).toHaveAttribute("data-assigned-visibility", "face_down");
-    expect(screen.getByRole("button", { name: "Supply card card-b" })).toHaveAttribute("data-assigned-visibility", "face_up");
-    expect(confirm).toHaveAttribute("data-plan-id", "swapped");
-    await userEvent.click(screen.getByRole("button", { name: "FACE UP" }));
-    expect(confirm).toHaveAttribute("data-plan-id", "plan-opaque");
-    await userEvent.click(confirm);
+    expect(submitted).toBeUndefined();
+    await user.click(confirm);
     await waitFor(() => expect(submitted).toEqual({ plan_id: "plan-opaque", expected_revision: 7 }));
   });
 
-  it("shows checkpoint deltas in PLAYERS and only acknowledges through CONTINUE", async () => {
+  it("stages signed Market Impact direction and company through the atomic decision endpoint", async () => {
     let submitted: unknown;
-    const checkpointView: GameView = {
+    const impactView: GameView = {
       ...gameView,
-      checkpoint: { checkpoint_id: "checkpoint-secret", kind: "demand_result", round: 3 },
-      pending_decision: { ...gameView.pending_decision, kind: "acknowledge" },
-      legal_actions: [{ action_id: 1, control: "generic", label: "Should not render", target_id: null, amount_thousands: null, direction: null, sale_preview: null }],
-    };
-    server.use(
-      http.get("/api/v2/games/result/view", () => HttpResponse.json(checkpointView)),
-      http.post("/api/v2/games/result/acknowledgements", async ({ request }) => {
-        submitted = await request.json();
-        return HttpResponse.json({ ...checkpointView, revision: 8, checkpoint: null });
-      }),
-    );
-    render(<GamePage gameId="result" token="seat-secret" />);
-    expect(await screen.findByText("DEMAND RESULT")).toBeInTheDocument();
-    expect(screen.queryByText("Should not render")).not.toBeInTheDocument();
-    const button = screen.getByRole("button", { name: "CONTINUE" });
-    expect(button).toHaveAttribute("data-checkpoint-kind", "demand_result");
-    await userEvent.click(button);
-    await waitFor(() => expect(submitted).toEqual({ checkpoint_id: "checkpoint-secret", expected_revision: 7 }));
-  });
-
-  it("presents the completed Movement batch, including a dividend reveal, until CONTINUE", async () => {
-    const roundResult: GameView = {
-      ...gameView,
-      phase: "ROUND_RESULT",
-      checkpoint: { checkpoint_id: "round-result", kind: "round_result", round: 3 },
-      pending_decision: { ...gameView.pending_decision, kind: "acknowledge" },
+      phase: "action",
+      phase_step: "action",
+      supply_batch: null,
       legal_actions: [],
-      recent_events: [
-        ...gameView.recent_events,
-        { event_id: 3, event_type: "market_reveal", cause: "market_forecast", round: 3, company_id: 4, prior_price_dollars_per_share: 5, price_delta: null, resulting_price_dollars_per_share: 5, forecast: "DIVIDEND", cash_effect_thousands: 2, direction: null },
-      ],
-    };
-    server.use(http.get("/api/v2/games/movement/view", () => HttpResponse.json(roundResult)));
-    render(<GamePage gameId="movement" token="seat-secret" />);
-    const market = await screen.findByLabelText("Market");
-    expect(within(market).getByText("↑2")).toBeInTheDocument();
-    expect(within(market).getByText("↓1")).toBeInTheDocument();
-    expect(within(market).queryByText("+$")).not.toBeInTheDocument();
-    expect(within(screen.getByLabelText("Public information")).getByLabelText("Cash increases by 2K")).toHaveTextContent("+$2K");
-  });
-
-  it("uses arrows for price changes and currency signs for cash changes", async () => {
-    const informationView: GameView = {
-      ...gameView,
       private: {
         ...gameView.private,
-        market_information: [
-          { visibility: "private", card: { visibility: "visible", kind: "company_forecast", company_id: 0, company: "Cosmic Computers", forecast: 3, cash_effect_thousands: null } },
-          { visibility: "public", card: { visibility: "visible", kind: "company_forecast", company_id: 4, company: "Stanford Steel", forecast: "DIVIDEND", cash_effect_thousands: 2 } },
-          { visibility: "hidden", card: { visibility: "hidden" } },
+        available_action_cards: [
+          { visibility: "visible", kind: "action", effect: "Stock Boom", direction: "up", movement: 2 },
+          { visibility: "visible", kind: "action", effect: "Stock Bust", direction: "down", movement: -2 },
         ],
       },
+      decision_batch: { kind: "market_impact", plans: [
+        { plan_id: "impact-up-cosmic", direction: "up", company_id: 0, movement: 2 },
+        { plan_id: "impact-down-cosmic", direction: "down", company_id: 0, movement: -2 },
+      ] },
     };
-    server.use(http.get("/api/v2/games/info/view", () => HttpResponse.json(informationView)));
-    render(<GamePage gameId="info" token="seat-secret" />);
-    expect(await screen.findByLabelText("Price up 3")).toHaveTextContent("↑3");
-    expect(screen.getByLabelText("Cash increases by 2K")).toHaveTextContent("+$2K");
-    expect(screen.getByLabelText("Cash decreases by 4K")).toHaveTextContent("−$4K");
-    expect(document.body).not.toHaveTextContent("$$");
+    server.use(
+      http.get("/api/v2/games/impact/view", () => HttpResponse.json(impactView)),
+      http.post("/api/v2/games/impact/decisions", async ({ request }) => {
+        submitted = await request.json();
+        return HttpResponse.json({ ...impactView, revision: 8, decision_batch: null });
+      }),
+    );
+    const user = userEvent.setup();
+    render(<GamePage gameId="impact" token="seat-secret" />);
+    const boom = await screen.findByRole("button", { name: "Stock Boom" });
+    expect(boom).toHaveAttribute("aria-pressed", "false");
+    await user.click(boom);
+    const selectedBoom = screen.getByRole("button", { name: "Stock Boom" });
+    expect(selectedBoom).toHaveAttribute("aria-pressed", "true");
+    await user.click(selectedBoom);
+    expect(screen.getByRole("button", { name: "Stock Boom" })).toHaveAttribute("aria-pressed", "false");
+    await user.click(screen.getByRole("button", { name: "Stock Boom" }));
+    await user.click(screen.getByRole("button", { name: "Select COSMIC" }));
+    const confirm = screen.getByRole("button", { name: "CONFIRM" });
+    expect(confirm).toHaveAttribute("data-plan-id", "impact-up-cosmic");
+    await user.click(confirm);
+    await waitFor(() => expect(submitted).toEqual({ plan_id: "impact-up-cosmic", expected_revision: 7 }));
   });
 
-  it("keeps the two server-authored dividend choices distinct", async () => {
+  it("holds checkpoints until CONTINUE and provides a presentation-only BACK before a human decision", async () => {
+    let acknowledgements = 0;
+    const checkpoint: GameView = {
+      ...gameView,
+      checkpoint: { checkpoint_id: "demand-result", kind: "demand_result", round: 3 },
+      pending_decision: { ...gameView.pending_decision, kind: "acknowledge" },
+      decision_batch: null,
+      legal_actions: [],
+    };
+    const next = { ...gameView, revision: 8 };
+    server.use(
+      http.get("/api/v2/games/checkpoint/view", () => HttpResponse.json(checkpoint)),
+      http.post("/api/v2/games/checkpoint/acknowledgements", () => {
+        acknowledgements += 1;
+        return HttpResponse.json(next);
+      }),
+    );
+    const user = userEvent.setup();
+    render(<GamePage gameId="checkpoint" token="seat-secret" />);
+    const continueButton = await screen.findByRole("button", { name: "CONTINUE" });
+    expect(continueButton).toHaveAttribute("data-checkpoint-kind", "demand_result");
+    await user.click(continueButton);
+    const back = await screen.findByRole("button", { name: "BACK" });
+    expect(acknowledgements).toBe(1);
+    await user.click(back);
+    expect(screen.getByText("DEMAND RESULT")).toBeInTheDocument();
+    const returnLive = screen.getByRole("button", { name: "CONTINUE" });
+    expect(returnLive).toBeEnabled();
+    await user.click(returnLive);
+    expect(await screen.findByRole("button", { name: "BACK" })).toBeInTheDocument();
+    expect(acknowledgements).toBe(1);
+  });
+
+  it("stages server-authored dividend choices and never conflates cash with price movement", async () => {
+    let submitted: unknown;
     const dividendView: GameView = {
       ...gameView,
       phase: "movement",
       phase_step: "dividend_claim",
       pending_decision: { ...gameView.pending_decision, kind: "dividend_claim" },
-      legal_actions: [
-        { action_id: 300, control: "dividend", label: "Waive dividend", target_id: null, amount_thousands: null, direction: null, sale_preview: null },
-        { action_id: 301, control: "dividend", label: "Claim dividend", target_id: null, amount_thousands: null, direction: null, sale_preview: null },
-      ],
+      decision_batch: null,
+      legal_actions: [action(300, "Waive dividend"), action(301, "Claim dividend")],
+      private: {
+        ...gameView.private,
+        market_information: [
+          { visibility: "private", card: { visibility: "visible", kind: "company_forecast", company_id: 0, company: "Cosmic Computers", forecast: 3, cash_effect_thousands: null } },
+          { visibility: "private", card: { visibility: "visible", kind: "company_forecast", company_id: 4, company: "Stanford Steel", forecast: "DIVIDEND", cash_effect_thousands: 2 } },
+          { visibility: "public", card: { visibility: "visible", kind: "company_forecast", company_id: 1, company: "Bottomline Bank", forecast: -4, cash_effect_thousands: null } },
+        ],
+      },
     };
-    server.use(http.get("/api/v2/games/dividend/view", () => HttpResponse.json(dividendView)));
+    server.use(
+      http.get("/api/v2/games/dividend/view", () => HttpResponse.json(dividendView)),
+      http.post("/api/v2/games/dividend/actions", async ({ request }) => {
+        submitted = await request.json();
+        return HttpResponse.json({ ...dividendView, revision: 8, legal_actions: [] });
+      }),
+    );
+    const user = userEvent.setup();
     render(<GamePage gameId="dividend" token="seat-secret" />);
-    expect(await screen.findByRole("button", { name: "Waive dividend" })).toHaveTextContent("WAIVE DIVIDEND");
-    expect(screen.getByRole("button", { name: "Claim dividend" })).toHaveTextContent("CLAIM DIVIDEND");
+    const research = await screen.findByLabelText("Research");
+    expect(within(research).getByLabelText("Price up 3")).toHaveTextContent("↑3");
+    expect(within(research).getByLabelText("Cash increases by 2K")).toHaveTextContent("+$2K");
+    expect(within(research).queryByLabelText("Price down 4")).not.toBeInTheDocument();
+    const claim = screen.getByRole("button", { name: "Claim dividend" });
+    expect(screen.getByRole("button", { name: "Waive dividend" })).toHaveTextContent("WAIVE DIVIDEND");
+    await user.click(claim);
+    expect(submitted).toBeUndefined();
+    await user.click(screen.getByRole("button", { name: "CONFIRM" }));
+    await waitFor(() => expect(submitted).toEqual({ action_id: 301, expected_revision: 7 }));
   });
 
-  it("contains no multiplayer, analysis, chat, or hidden-card metadata UI", async () => {
+  it("keeps calculations above a shared-scale terminal chart, whites Portfolio, and omits winner copy", async () => {
+    const navigate = vi.fn();
+    const terminalView: GameView = {
+      ...gameView,
+      active_player_id: null,
+      phase: "terminal",
+      phase_step: "terminal",
+      checkpoint: null,
+      decision_batch: null,
+      legal_actions: [],
+      pending_decision: { ...gameView.pending_decision, kind: "terminal" },
+      terminal_results: {
+        winner_ids: [0],
+        players: [
+          { player_id: 0, player_name: "YOU", cash_before_liquidation_thousands: 13, liquidation_value_thousands: 141, final_cash_thousands: 154, rank: 1, winner: true, liquidation: [
+            { company_id: 0, company: "Cosmic Computers", shares_thousands: 3, price_dollars_per_share: 47, value_thousands: 141 },
+          ] },
+          { player_id: 1, player_name: "COMPUTER", cash_before_liquidation_thousands: -5, liquidation_value_thousands: 90, final_cash_thousands: 85, rank: 2, winner: false, liquidation: [] },
+        ],
+      },
+    };
+    server.use(http.get("/api/v2/games/terminal/view", () => HttpResponse.json(terminalView)));
+    const user = userEvent.setup();
+    render(<GamePage gameId="terminal" token="seat-secret" navigate={navigate} />);
+    const field = await screen.findByLabelText("Game end");
+    expect(within(field).getByText("3K × $47 / SHARE = $141K")).toBeInTheDocument();
+    const chart = screen.getByTestId("terminal-chart");
+    expect(chart).toHaveAttribute("data-chart-min", "-5");
+    expect(chart.querySelectorAll('[data-chart-segment="position"]')).toHaveLength(2);
+    expect(chart.querySelectorAll('[data-chart-segment="cash"]')).toHaveLength(2);
+    const calculations = field.querySelector("[class*='rankings']");
+    expect(calculations).not.toBeNull();
+    expect(calculations!.compareDocumentPosition(chart) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByLabelText("Portfolio").querySelector('[data-white-out="true"]')).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("WINNER");
+    expect(screen.getByRole("button", { name: "RESIGN" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Action dock").querySelectorAll("[data-dock-control]")).toHaveLength(2);
+    await user.click(screen.getByRole("button", { name: "CONTINUE" }));
+    expect(navigate).toHaveBeenCalledWith("/");
+  });
+
+  it("arms authoritative resignation, clears the seat token only after 204, and returns home", async () => {
+    let request: unknown;
+    const navigate = vi.fn();
+    sessionStorage.setItem(seatStorageKey("resign"), "seat-secret");
+    server.use(
+      http.get("/api/v2/games/resign/view", () => HttpResponse.json(gameView)),
+      http.post("/api/v2/games/resign/resignations", async ({ request: incoming }) => {
+        request = await incoming.json();
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    const user = userEvent.setup();
+    render(<GamePage gameId="resign" token="seat-secret" navigate={navigate} />);
+    await user.click(await screen.findByRole("button", { name: "RESIGN" }));
+    expect(sessionStorage.getItem(seatStorageKey("resign"))).toBe("seat-secret");
+    const confirm = screen.getByRole("button", { name: "CONFIRM" });
+    expect(confirm).toHaveAttribute("data-resign-confirm", "true");
+    await user.click(confirm);
+    await waitFor(() => expect(request).toEqual({ expected_revision: 7 }));
+    expect(sessionStorage.getItem(seatStorageKey("resign"))).toBeNull();
+    expect(navigate).toHaveBeenCalledWith("/");
+  });
+
+  it("contains no multiplayer, public, analysis, chat, or pile-number text", async () => {
     render(<GamePage gameId="unusual" token="seat-secret" />);
-    const hidden = await screen.findAllByLabelText("Hidden card");
-    for (const card of hidden) expect(card).toHaveTextContent("");
-    const text = document.body.textContent?.toLowerCase() ?? "";
-    for (const forbidden of ["chat", "history", "seat", "deep cfr", "recommendation", "expected value", "exploitability", "policy", "advantage", "s3", "s4"]) {
-      expect(text).not.toContain(forbidden);
+    await screen.findByLabelText("Stockpiles");
+    const visibleText = document.body.textContent?.toLowerCase() ?? "";
+    for (const forbidden of ["chat", "history", "seat", "public", "deep cfr", "recommendation", "expected value", "exploitability", "policy", "advantage", "pile 1", "pile 2", "s3", "s4"]) {
+      expect(visibleText).not.toContain(forbidden);
     }
   });
 });

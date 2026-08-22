@@ -25,6 +25,9 @@ from .v2_schemas import (
     ConfigurationV2,
     CreateGameRequestV2,
     CreateGameResponseV2,
+    DecisionBatchV2,
+    DemandDecisionBatchV2,
+    DemandDecisionPlanV2,
     GameViewV2,
     HiddenCardV2,
     HoldingV2,
@@ -34,7 +37,10 @@ from .v2_schemas import (
     LiquidationLineV2,
     LiteOptionsV2,
     MarketInformationSlotV2,
+    MarketImpactDecisionBatchV2,
+    MarketImpactDecisionPlanV2,
     PendingDecisionV2,
+    PileCardV2,
     PresentationCheckpointV2,
     PublicEventV2,
     RememberedCardV2,
@@ -93,10 +99,30 @@ class OrderedPileCard:
 
 
 @dataclass(frozen=True, slots=True)
+class CapturedPileCard:
+    card: platform.Card
+    face_up: bool
+
+
+@dataclass(frozen=True, slots=True)
 class SupplyPlanRecord:
     plan_id: str
     action_ids: tuple[int, int, int]
     placements: tuple[SupplyPlacementV2, SupplyPlacementV2]
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionPlanRecord:
+    plan_id: str
+    kind: str
+    action_ids: tuple[int, int]
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedAuctionSnapshot:
+    round: int
+    stockpiles: tuple[StockpileV2, ...]
+    markers: tuple[BidMarkerV2, ...]
 
 
 @dataclass(slots=True)
@@ -126,6 +152,7 @@ class V2GameSession:
     revision: int = 0
     ordered_piles: dict[int, list[OrderedPileCard]] = field(default_factory=dict)
     supply_plans: dict[str, SupplyPlanRecord] = field(default_factory=dict)
+    decision_plans: dict[str, DecisionPlanRecord] = field(default_factory=dict)
     used_bid_markers: set[tuple[int, int]] = field(default_factory=set)
     outbid_markers: set[tuple[int, int]] = field(default_factory=set)
     bid_tracking_round: int = 1
@@ -135,6 +162,8 @@ class V2GameSession:
     cash_deltas: tuple[int, int] | None = None
     last_end_position: int = 0
     position_delta: int | None = None
+    resolved_auction: ResolvedAuctionSnapshot | None = None
+    closed: bool = False
 
     @property
     def rule_set(self) -> platform.RuleSet:
@@ -210,6 +239,7 @@ class V2SessionStore:
 
     def view(self, session: V2GameSession) -> GameViewV2:
         with session.lock:
+            self._validate_open(session)
             return self._build_view(session)
 
     def act(
@@ -220,6 +250,7 @@ class V2SessionStore:
         expected_revision: int,
     ) -> GameViewV2:
         with session.lock:
+            self._validate_open(session)
             self._validate_revision(session, expected_revision)
             self._validate_action_window(session)
             if self._is_buffered_selling(session):
@@ -231,7 +262,24 @@ class V2SessionStore:
                     raise SessionError(
                         422, "supply_plan_required", "Submit the complete Supply plan"
                     )
-                legal_ids = {int(value) for value in session.state.legal_actions(HUMAN_ID)}
+                if session.state.stage in {
+                    "demand_pile",
+                    "demand_bid",
+                    "action_direction",
+                    "action_company",
+                }:
+                    raise SessionError(
+                        422,
+                        "decision_plan_required",
+                        "Submit the complete decision plan",
+                    )
+                _information, observed_legal = platform.observe_game_state(
+                    session.rule_set, session.state, HUMAN_ID
+                )
+                projected_legal = self._deduplicate_sell_actions(
+                    session, session.state, observed_legal
+                )
+                legal_ids = {int(action.action_id) for action in projected_legal}
                 if action_id not in legal_ids:
                     raise SessionError(422, "illegal_action", "Action is not legal now")
                 self._track_bid_before_action(session, action_id)
@@ -249,6 +297,7 @@ class V2SessionStore:
         expected_revision: int,
     ) -> GameViewV2:
         with session.lock:
+            self._validate_open(session)
             self._validate_revision(session, expected_revision)
             self._validate_action_window(session)
             if self._is_buffered_selling(session):
@@ -282,6 +331,45 @@ class V2SessionStore:
             session.revision += 1
             return self._build_view(session)
 
+    def decide(
+        self,
+        session: V2GameSession,
+        *,
+        plan_id: str,
+        expected_revision: int,
+    ) -> GameViewV2:
+        """Commit one browser decision while retaining its canonical engine steps."""
+
+        with session.lock:
+            self._validate_open(session)
+            self._validate_revision(session, expected_revision)
+            self._validate_action_window(session)
+            if self._is_buffered_selling(session):
+                raise SessionError(
+                    422, "invalid_decision_plan", "A decision plan is not active"
+                )
+            batch = self._decision_batch(session)
+            plan = session.decision_plans.get(plan_id)
+            if batch is None or plan is None:
+                raise SessionError(
+                    422, "invalid_decision_plan", "Decision plan is not legal now"
+                )
+
+            candidate = session.state
+            for action_id in plan.action_ids:
+                candidate = _apply_player_action(
+                    session.rule_set, candidate, HUMAN_ID, action_id
+                )
+
+            for action_id in plan.action_ids:
+                self._track_bid_before_action(session, action_id)
+                self._apply_and_observe(session, HUMAN_ID, action_id)
+            session.decision_plans.clear()
+            if session.checkpoint is None:
+                self._advance_automatic(session)
+            session.revision += 1
+            return self._build_view(session)
+
     def acknowledge(
         self,
         session: V2GameSession,
@@ -290,6 +378,7 @@ class V2SessionStore:
         expected_revision: int,
     ) -> GameViewV2:
         with session.lock:
+            self._validate_open(session)
             self._validate_revision(session, expected_revision)
             checkpoint = session.checkpoint
             if checkpoint is None or not hmac.compare_digest(
@@ -298,12 +387,37 @@ class V2SessionStore:
                 raise SessionError(
                     409, "stale_checkpoint", "The result checkpoint has changed"
                 )
+            checkpoint_kind = checkpoint.kind
             session.checkpoint = None
             session.cash_deltas = None
             session.position_delta = None
+            if checkpoint_kind == "round_result":
+                session.resolved_auction = None
             self._advance_automatic(session)
             session.revision += 1
             return self._build_view(session)
+
+    def resign(
+        self,
+        session: V2GameSession,
+        *,
+        expected_revision: int,
+    ) -> None:
+        """Close and remove a session, excluding already queued operations."""
+
+        with session.lock:
+            self._validate_open(session)
+            self._validate_revision(session, expected_revision)
+            session.closed = True
+            session.revision += 1
+        with self._lock:
+            if self._sessions.get(session.game_id) is session:
+                del self._sessions[session.game_id]
+
+    @staticmethod
+    def _validate_open(session: V2GameSession) -> None:
+        if session.closed:
+            raise SessionError(409, "game_closed", "The game has been closed")
 
     @staticmethod
     def _validate_revision(session: V2GameSession, expected_revision: int) -> None:
@@ -397,6 +511,12 @@ class V2SessionStore:
         before = session.state
         before_phase = before.phase
         before_round = before.round
+        captured_cards: dict[int, tuple[CapturedPileCard, ...]] | None = None
+        if (
+            before.phase == platform.Phase.DEMAND.value
+            and before.stage == "demand_bid"
+        ):
+            captured_cards = self._capture_pile_cards(session, before)
         supply_record = self._pending_supply_record(session, before, action_id)
         session.state = _apply_player_action(
             session.rule_set, before, player_id, action_id
@@ -406,7 +526,12 @@ class V2SessionStore:
                 session.ordered_piles[pile_id].append(
                     OrderedPileCard(card_id=card_id, face_up=face_up)
                 )
-        self._after_transition(session, before_phase, before_round)
+        self._after_transition(
+            session,
+            before_phase,
+            before_round,
+            captured_cards=captured_cards,
+        )
 
     @staticmethod
     def _pending_supply_record(
@@ -432,6 +557,8 @@ class V2SessionStore:
         session: V2GameSession,
         before_phase: str,
         before_round: int,
+        *,
+        captured_cards: Mapping[int, Sequence[CapturedPileCard]] | None = None,
     ) -> None:
         self._record_demand_entry(session)
         if before_phase == platform.Phase.DEMAND.value and session.state.phase != before_phase:
@@ -441,6 +568,55 @@ class V2SessionStore:
             now = tuple(int(player.cash) for player in session.state.players)
             session.cash_deltas = (now[0] - before_cash[0], now[1] - before_cash[1])
             session.demand_cash_before = None
+            if captured_cards is None:
+                raise RuntimeError("Demand resolved without a safe Stockpile snapshot")
+            resolved_information, _legal = platform.observe_game_state(
+                session.rule_set, session.state, HUMAN_ID
+            )
+            known = {
+                card.card_id: card for card in resolved_information.known_cards
+            }
+            markers = self._bid_markers(session)
+            stockpiles: list[StockpileV2] = []
+            for pile in session.state.stockpiles:
+                marker = next(
+                    (
+                        item
+                        for item in markers
+                        if item.stockpile_id == pile.stockpile_id
+                        and item.status in {"placed", "locked"}
+                    ),
+                    None,
+                )
+                bid = (
+                    StockpileBidV2(
+                        player_id=marker.player_id,
+                        marker_index=marker.marker_index,
+                        amount_thousands=int(marker.bid_thousands or 0),
+                    )
+                    if marker is not None
+                    else None
+                )
+                stockpiles.append(
+                    StockpileV2(
+                        stockpile_id=pile.stockpile_id,
+                        cards_bottom_to_top=[
+                            self._captured_pile_card(
+                                session.rule_set, item, known
+                            )
+                            for item in captured_cards.get(pile.stockpile_id, ())
+                        ],
+                        bid=bid,
+                        locked=bool(pile.locked),
+                        purchaser_id=pile.purchaser,
+                        resolved=True,
+                    )
+                )
+            session.resolved_auction = ResolvedAuctionSnapshot(
+                round=before_round,
+                stockpiles=tuple(stockpiles),
+                markers=tuple(markers),
+            )
             self._clear_ordered_piles(session)
             session.checkpoint = self._checkpoint("demand_result", before_round)
             return
@@ -610,7 +786,13 @@ class V2SessionStore:
             )
         if plan.state.current_player() != HUMAN_ID:
             raise SessionError(409, "turn_conflict", "YOU cannot act now")
-        legal_ids = {int(value) for value in plan.state.legal_actions(HUMAN_ID)}
+        _information, observed_legal = platform.observe_game_state(
+            session.rule_set, plan.state, HUMAN_ID
+        )
+        projected_legal = self._deduplicate_sell_actions(
+            session, plan.state, observed_legal
+        )
+        legal_ids = {int(action.action_id) for action in projected_legal}
         if action_id not in legal_ids:
             raise SessionError(422, "illegal_action", "Action is not legal now")
         plan.action_ids.append(action_id)
@@ -745,6 +927,174 @@ class V2SessionStore:
         session.supply_plans = generated
         return SupplyBatchV2(cards=public_cards, plans=public_plans)
 
+    def _decision_batch(self, session: V2GameSession) -> DecisionBatchV2 | None:
+        state = session.state
+        if (
+            session.checkpoint is not None
+            or state.is_terminal()
+            or state.current_player() != HUMAN_ID
+            or self._is_buffered_selling(session)
+        ):
+            session.decision_plans.clear()
+            return None
+        if state.stage not in {"demand_pile", "action_direction"}:
+            session.decision_plans.clear()
+            return None
+
+        _information, first_actions = platform.observe_game_state(
+            session.rule_set, state, HUMAN_ID
+        )
+        generated: dict[str, DecisionPlanRecord] = {}
+        if state.stage == "demand_pile":
+            if state._demand_token is None:
+                raise RuntimeError("Demand decision has no active marker")
+            marker_index = int(state._demand_token[1])
+            public_plans: list[DemandDecisionPlanV2] = []
+            for pile_action in first_actions:
+                first = _apply_player_action(
+                    session.rule_set, state, HUMAN_ID, pile_action.action_id
+                )
+                _namespace, pile_id = session.rule_set.action_codec.decode(
+                    pile_action.action_id
+                )
+                _information, bid_actions = platform.observe_game_state(
+                    session.rule_set, first, HUMAN_ID
+                )
+                for bid_action in bid_actions:
+                    if bid_action.amount is None:
+                        raise RuntimeError("Demand bid action has no amount")
+                    action_ids = (
+                        int(pile_action.action_id),
+                        int(bid_action.action_id),
+                    )
+                    presentation = {
+                        "stockpile_id": int(pile_id),
+                        "amount_thousands": int(bid_action.amount),
+                        "marker_index": marker_index,
+                    }
+                    plan_id = self._decision_plan_id(
+                        session, "demand", action_ids, presentation
+                    )
+                    generated[plan_id] = DecisionPlanRecord(
+                        plan_id=plan_id,
+                        kind="demand",
+                        action_ids=action_ids,
+                    )
+                    public_plans.append(
+                        DemandDecisionPlanV2(plan_id=plan_id, **presentation)
+                    )
+            session.decision_plans = generated
+            return DemandDecisionBatchV2(plans=public_plans)
+
+        public_impact_plans: list[MarketImpactDecisionPlanV2] = []
+        for direction_action in first_actions:
+            first = _apply_player_action(
+                session.rule_set, state, HUMAN_ID, direction_action.action_id
+            )
+            _namespace, direction_ordinal = session.rule_set.action_codec.decode(
+                direction_action.action_id
+            )
+            direction = "up" if int(direction_ordinal) == 0 else "down"
+            _information, company_actions = platform.observe_game_state(
+                session.rule_set, first, HUMAN_ID
+            )
+            for company_action in company_actions:
+                _namespace, company_id = session.rule_set.action_codec.decode(
+                    company_action.action_id
+                )
+                action_ids = (
+                    int(direction_action.action_id),
+                    int(company_action.action_id),
+                )
+                presentation = {
+                    "direction": direction,
+                    "company_id": int(company_id),
+                    "movement": 2 if direction == "up" else -2,
+                }
+                plan_id = self._decision_plan_id(
+                    session, "market_impact", action_ids, presentation
+                )
+                generated[plan_id] = DecisionPlanRecord(
+                    plan_id=plan_id,
+                    kind="market_impact",
+                    action_ids=action_ids,
+                )
+                public_impact_plans.append(
+                    MarketImpactDecisionPlanV2(plan_id=plan_id, **presentation)
+                )
+        session.decision_plans = generated
+        return MarketImpactDecisionBatchV2(plans=public_impact_plans)
+
+    @staticmethod
+    def _decision_plan_id(
+        session: V2GameSession,
+        kind: str,
+        action_ids: tuple[int, int],
+        presentation: Mapping[str, Any],
+    ) -> str:
+        payload = {
+            "revision": session.revision,
+            "kind": kind,
+            "actions": action_ids,
+            "presentation": dict(presentation),
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hmac.new(
+            session.plan_secret, encoded.encode("utf-8"), hashlib.sha256
+        ).hexdigest()[:32]
+
+    def _deduplicate_sell_actions(
+        self,
+        session: V2GameSession,
+        state: platform.GameState,
+        legal: Sequence[platform.LegalAction],
+    ) -> Sequence[platform.LegalAction]:
+        if state.phase != platform.Phase.SELLING.value or state.stage != "selling":
+            return legal
+        selected: dict[
+            tuple[int, int, int, int], tuple[platform.LegalAction, bool]
+        ] = {}
+        for action in legal:
+            preview = platform.preview_sale_action(
+                session.rule_set,
+                state,
+                int(state.current_player()),
+                int(action.action_id),
+            )
+            key = (
+                int(preview.company_id),
+                int(preview.quantity_sold),
+                int(preview.gross_value),
+                int(preview.resulting_represented),
+            )
+            advances = self._sale_advances_cursor(session, state, action.action_id)
+            current = selected.get(key)
+            if current is None or (advances and not current[1]):
+                selected[key] = (action, advances)
+        return tuple(item[0] for item in selected.values())
+
+    @staticmethod
+    def _sale_advances_cursor(
+        session: V2GameSession,
+        state: platform.GameState,
+        action_id: int,
+    ) -> bool:
+        before = (
+            state.phase,
+            int(state.current_player()),
+            int(state._selling_company),
+        )
+        after = _apply_player_action(
+            session.rule_set, state, int(state.current_player()), int(action_id)
+        )
+        if after.phase != platform.Phase.SELLING.value:
+            return True
+        return (
+            after.phase,
+            int(after.current_player()),
+            int(after._selling_company),
+        ) != before
+
     @staticmethod
     def _card_ref(session: V2GameSession, card_id: int) -> str:
         return hmac.new(
@@ -861,19 +1211,38 @@ class V2SessionStore:
                 presentation.stage if active_player_id == HUMAN_ID else "waiting"
             )
 
-        markers = self._bid_markers(session)
+        live_markers = self._bid_markers(session)
+        if session.resolved_auction is not None:
+            markers = [
+                marker.model_copy(deep=True)
+                for marker in session.resolved_auction.markers
+            ]
+            stockpiles = [
+                stockpile.model_copy(deep=True)
+                for stockpile in session.resolved_auction.stockpiles
+            ]
+        else:
+            markers = live_markers
+            stockpiles = self._stockpiles(
+                session, private_information, markers
+            )
+        legal = self._deduplicate_sell_actions(session, private_state, legal)
         legal_actions = [
             self._legal_action(session, private_state, action) for action in legal
         ]
         supply_batch = self._supply_batch(session)
+        decision_batch = self._decision_batch(session)
         if supply_batch is not None:
             legal_actions = []
             phase_step = "supply"
+        if decision_batch is not None:
+            legal_actions = []
         pending = self._pending_decision(
             session,
             private_state,
             legal_actions,
             supply_batch,
+            decision_batch,
             human_plan,
         )
         options = LiteOptionsV2(
@@ -897,9 +1266,7 @@ class V2SessionStore:
             viewer=ViewerV2(),
             active_player_id=active_player_id,
             companies=self._companies(session, public),
-            stockpiles=self._stockpiles(
-                session, private_information, markers
-            ),
+            stockpiles=stockpiles,
             players=self._players(
                 session,
                 markers,
@@ -915,6 +1282,7 @@ class V2SessionStore:
             pending_decision=pending,
             legal_actions=legal_actions,
             supply_batch=supply_batch,
+            decision_batch=decision_batch,
             checkpoint=checkpoint,
             recent_events=self._presentation_events(session.state, round_number),
             terminal_results=terminal,
@@ -979,9 +1347,50 @@ class V2SessionStore:
         information: platform.InformationState,
         markers: Sequence[BidMarkerV2],
     ) -> list[StockpileV2]:
-        known = {card.card_id: card for card in information.known_cards}
+        cards_by_pile = self._viewer_pile_cards(
+            session, session.state, information
+        )
         result: list[StockpileV2] = []
         for pile in session.state.stockpiles:
+            marker = next(
+                (
+                    item
+                    for item in markers
+                    if item.stockpile_id == pile.stockpile_id
+                    and item.status in {"placed", "locked"}
+                ),
+                None,
+            )
+            bid = (
+                StockpileBidV2(
+                    player_id=marker.player_id,
+                    marker_index=marker.marker_index,
+                    amount_thousands=int(marker.bid_thousands or 0),
+                )
+                if marker is not None
+                else None
+            )
+            result.append(
+                StockpileV2(
+                    stockpile_id=pile.stockpile_id,
+                    cards_bottom_to_top=list(cards_by_pile[pile.stockpile_id]),
+                    bid=bid,
+                    locked=bool(pile.locked),
+                    purchaser_id=pile.purchaser,
+                    resolved=False,
+                )
+            )
+        return result
+
+    def _viewer_pile_cards(
+        self,
+        session: V2GameSession,
+        state: platform.GameState,
+        information: platform.InformationState,
+    ) -> dict[int, tuple[PileCardV2, ...]]:
+        known = {card.card_id: card for card in information.known_cards}
+        result: dict[int, tuple[PileCardV2, ...]] = {}
+        for pile in state.stockpiles:
             actual = {
                 card.card_id: card
                 for card in pile.face_up_cards + pile.face_down_cards
@@ -1004,34 +1413,43 @@ class V2SessionStore:
                     )
                 else:
                     cards.append(HiddenCardV2())
-            marker = next(
-                (
-                    item
-                    for item in markers
-                    if item.stockpile_id == pile.stockpile_id
-                    and item.status in {"placed", "locked"}
-                ),
-                None,
-            )
-            bid = (
-                StockpileBidV2(
-                    player_id=marker.player_id,
-                    marker_index=marker.marker_index,
-                    amount_thousands=int(marker.bid_thousands or 0),
-                )
-                if marker is not None
-                else None
-            )
-            result.append(
-                StockpileV2(
-                    stockpile_id=pile.stockpile_id,
-                    cards_bottom_to_top=cards,
-                    bid=bid,
-                    locked=bool(pile.locked),
-                    purchaser_id=pile.purchaser,
-                )
-            )
+            result[pile.stockpile_id] = tuple(cards)
         return result
+
+    @staticmethod
+    def _capture_pile_cards(
+        session: V2GameSession,
+        state: platform.GameState,
+    ) -> dict[int, tuple[CapturedPileCard, ...]]:
+        captured: dict[int, tuple[CapturedPileCard, ...]] = {}
+        for pile in state.stockpiles:
+            actual = {
+                card.card_id: card
+                for card in pile.face_up_cards + pile.face_down_cards
+            }
+            ledger = session.ordered_piles[pile.stockpile_id]
+            if set(actual) != {entry.card_id for entry in ledger}:
+                raise RuntimeError("ordered Stockpile ledger diverged from engine state")
+            captured[pile.stockpile_id] = tuple(
+                CapturedPileCard(card=actual[entry.card_id], face_up=entry.face_up)
+                for entry in ledger
+            )
+        return captured
+
+    @staticmethod
+    def _captured_pile_card(
+        rule_set: platform.RuleSet,
+        captured: CapturedPileCard,
+        known: Mapping[int, platform.Card],
+    ) -> PileCardV2:
+        if captured.face_up:
+            return V2SessionStore._visible_card(rule_set, captured.card)
+        remembered = known.get(captured.card.card_id)
+        if remembered is not None:
+            return RememberedCardV2(
+                card=V2SessionStore._visible_card(rule_set, remembered)
+            )
+        return HiddenCardV2()
 
     def _players(
         self,
@@ -1238,6 +1656,7 @@ class V2SessionStore:
         state: platform.GameState,
         legal_actions: Sequence[LegalActionV2],
         supply_batch: SupplyBatchV2 | None,
+        decision_batch: DecisionBatchV2 | None,
         human_plan: SealedPlayerPlanV2 | None,
     ) -> PendingDecisionV2:
         if session.checkpoint is not None:
@@ -1256,6 +1675,10 @@ class V2SessionStore:
             )
         if supply_batch is not None:
             return PendingDecisionV2(kind="supply", prompt="PLACE")
+        if decision_batch is not None:
+            if decision_batch.kind == "demand":
+                return PendingDecisionV2(kind="bid_pile", prompt="BID")
+            return PendingDecisionV2(kind="action_card", prompt="IMPACT")
         if session.state.current_player() != HUMAN_ID or not legal_actions:
             return PendingDecisionV2(kind="waiting", prompt="COMPUTER")
         presentation = platform.get_presentation_state(

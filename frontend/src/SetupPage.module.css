@@ -9,18 +9,14 @@
   display: grid;
   justify-items: start;
   gap: 4px;
-  font-size: var(--secondary-size);
+  font-size: var(--primary-size);
   font-weight: 400;
   letter-spacing: .14em;
 }
 
-.identity span:first-child {
-  color: var(--blue);
-  font-size: var(--primary-size);
-  letter-spacing: .08em;
-}
+.identity span { color: var(--blue); }
 
-.identity span:last-child { color: var(--grey); }
+.identity span:first-child { letter-spacing: .08em; }
 
 .setup {
   display: grid;
@@ -30,13 +26,20 @@
   align-content: start;
 }
 
-.features { display: grid; gap: 24px; }
-.featureGrid { display: grid; grid-template-columns: repeat(2, minmax(130px, 1fr)); gap: 16px; }
+.modes,
+.featureGrid { display: grid; gap: 16px; }
+.modes { grid-template-columns: repeat(2, 144px); }
+.featureGrid { grid-template-columns: repeat(3, 144px); }
+.features { display: grid; margin-top: 56px; }
 .error { margin: 24px 0 0; color: var(--black); font-size: var(--secondary-size); }
-.start { justify-self: end; margin-top: auto; }
+.play { justify-self: end; margin-top: auto; }
 
 @media (max-width: 560px) {
   .page { padding: 32px 20px; }
   .setup { min-height: calc(100vh - 112px); margin-top: 64px; }
-  .featureGrid { gap: 8px; }
+  .modes,
+  .featureGrid {
+    grid-template-columns: repeat(auto-fit, 144px);
+    gap: 8px;
+  }
 }

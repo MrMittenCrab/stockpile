@@ -45,19 +45,34 @@ npm --prefix frontend install
 npm --prefix frontend exec -- playwright install chromium
 ```
 
-Start the backend and frontend in separate terminals:
+Start the complete local trainer with one command:
 
 ```console
-.venv/bin/python -m stockpile play --mode lite --host 127.0.0.1 --port 8000
-npm --prefix frontend run dev
+python -m stockpile play
 ```
 
-Open <http://127.0.0.1:5173>, choose from Dividend, Fees, Impact, and Sell Order,
-then press `START`. Starting Shares remain available through the engine and
-legacy API but are intentionally fixed off in this browser product. The browser
-moves directly into the human seat. The client submits only opaque actions and
-complete Supply plans offered by Python; it does not implement game rules or
-receive the computer's private portfolio.
+If the virtual environment is not active, use
+`.venv/bin/python -m stockpile play` instead.
+
+The command waits for both local services and then prints:
+
+```text
+Starting Stockpile Trainer...
+
+http://127.0.0.1:5173
+```
+
+It does not open a browser. Open <http://127.0.0.1:5173>, choose `LITE` or
+`LITE+`, then press `PLAY`. `LITE+` exposes Dividend, Fees, and Sell Order;
+Market Impact remains accepted by the V2 API for compatibility, while Starting
+Shares remain engine/legacy-V1 only. Neither is exposed by this browser setup.
+The browser moves directly into the human seat. The client submits only opaque
+actions and complete server-authored decision plans; it does not implement game
+rules or receive the computer's private portfolio.
+
+`--mode lite`, `--host`, and `--port` remain available for compatible local
+scripts. The launcher passes a non-default API address to Vite automatically.
+Press `Ctrl+C` once to stop both services.
 
 This interface intentionally has no accounts, matchmaking, human multiplayer,
 hot-seat mode, WebSockets, persistent storage, production deployment, or Deep

@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
+import { clearSeatToken } from "../api";
 import type {
   Card,
   Company,
@@ -9,25 +17,50 @@ import type {
   Stockpile,
   SupplyBatch,
   SupplyPlacement,
+  VisibleCard,
 } from "../types";
 import { useGameSession } from "../useGameSession";
 import { CardView, CompanyCard, HoldingCard } from "./CardView";
-import { SectionLabel, TextButton } from "./Primitives";
+import { CardFrame, SectionLabel, TextButton } from "./Primitives";
 import { Selectable } from "./Selectable";
 import { StockPattern } from "./StockPattern";
 import styles from "./Game.module.css";
 
 type SupplyDraft = Record<string, Partial<Pick<SupplyPlacement, "stockpile_id" | "visibility">>>;
+interface SupplySnapshot { selectedCardRef: string | null; draft: SupplyDraft }
+interface SupplyUi extends SupplySnapshot { history: SupplySnapshot[] }
+interface DecisionSnapshot {
+  actionId: number | null;
+  planId: string | null;
+  stockpileId: number | null;
+  direction: "up" | "down" | null;
+}
+interface DecisionUi extends DecisionSnapshot { history: DecisionSnapshot[] }
+interface TentativePlacement {
+  cardRef: string;
+  card: VisibleCard;
+  visibility: SupplyPlacement["visibility"];
+}
+
+const EMPTY_SUPPLY: SupplyUi = { selectedCardRef: null, draft: {}, history: [] };
+const EMPTY_DECISION: DecisionUi = {
+  actionId: null,
+  planId: null,
+  stockpileId: null,
+  direction: null,
+  history: [],
+};
 
 function money(value: number) { return `$${value}K`; }
 function price(value: number) { return `$${value} / SHARE`; }
-function targetNumber(target: string | null, prefix: string) {
-  if (!target?.startsWith(`${prefix}:`)) return null;
-  const value = Number(target.slice(prefix.length + 1));
-  return Number.isFinite(value) ? value : null;
-}
 function companyById(view: GameView, companyId: number | null) {
   return companyId === null ? undefined : view.companies.find((company) => company.company_id === companyId);
+}
+function decisionSnapshot(value: DecisionUi): DecisionSnapshot {
+  return { actionId: value.actionId, planId: value.planId, stockpileId: value.stockpileId, direction: value.direction };
+}
+function supplySnapshot(value: SupplyUi): SupplySnapshot {
+  return { selectedCardRef: value.selectedCardRef, draft: value.draft };
 }
 
 function Status({ view }: { view: GameView }) {
@@ -38,7 +71,7 @@ function Status({ view }: { view: GameView }) {
     turn = "";
   } else if (view.checkpoint) {
     phase = view.checkpoint.kind === "demand_result" ? "DEMAND RESULT" : "ROUND RESULT";
-    turn = "CONTINUE";
+    turn = "";
   } else if (view.active_player_id === view.viewer.player_id) {
     turn = "YOUR TURN";
   } else if (view.active_player_id !== null) {
@@ -53,23 +86,42 @@ function Status({ view }: { view: GameView }) {
   );
 }
 
-function Market({ view, movements, onAction, disabled }: {
+function Market({
+  view,
+  movements,
+  selectedActionId,
+  selectedPlanId,
+  selectedDirection,
+  onSelectAction,
+  onSelectImpactCompany,
+  disabled,
+}: {
   view: GameView;
   movements: MarketEvent[];
-  onAction: (actionId: number) => void;
+  selectedActionId: number | null;
+  selectedPlanId: string | null;
+  selectedDirection: "up" | "down" | null;
+  onSelectAction: (actionId: number) => void;
+  onSelectImpactCompany: (planId: string) => void;
   disabled: boolean;
 }) {
   const actions = new Map<number, LegalAction>();
   for (const action of view.legal_actions.filter((candidate) => candidate.control === "company")) {
-    const companyId = targetNumber(action.target_id, "company");
-    if (companyId !== null) actions.set(companyId, action);
+    const target = action.target_id?.match(/^company:(\d+)$/);
+    if (target) actions.set(Number(target[1]), action);
   }
+  const impactPlans = view.decision_batch?.kind === "market_impact" && selectedDirection
+    ? view.decision_batch.plans.filter((plan) => plan.direction === selectedDirection)
+    : [];
+  const plansByCompany = new Map(impactPlans.map((plan) => [plan.company_id, plan]));
+
   return (
     <section className={`${styles.module} ${styles.market}`} aria-label="Market">
       <SectionLabel>MARKET</SectionLabel>
       <div className={styles.marketList}>
         {view.companies.map((company) => {
           const action = actions.get(company.company_id);
+          const plan = plansByCompany.get(company.company_id);
           const movement = movements.find((event) => event.company_id === company.company_id);
           const body = (
             <span className={styles.marketCompany} data-company-id={company.company_id}>
@@ -83,18 +135,33 @@ function Market({ view, movements, onAction, disabled }: {
               )}
             </span>
           );
-          return action ? (
-            <Selectable
-              key={company.company_id}
-              className={styles.objectControl}
-              data-action-id={action.action_id}
-              aria-label={action.label}
-              disabled={disabled}
-              onClick={() => onAction(action.action_id)}
-            >
-              {body}
-            </Selectable>
-          ) : <span key={company.company_id}>{body}</span>;
+          if (plan) {
+            return (
+              <Selectable
+                key={company.company_id}
+                className={styles.objectControl}
+                selected={selectedPlanId === plan.plan_id}
+                data-decision-plan-id={plan.plan_id}
+                aria-label={`Select ${company.display_name}`}
+                disabled={disabled}
+                onClick={() => onSelectImpactCompany(plan.plan_id)}
+              >{body}</Selectable>
+            );
+          }
+          if (action) {
+            return (
+              <Selectable
+                key={company.company_id}
+                className={styles.objectControl}
+                selected={selectedActionId === action.action_id}
+                data-action-id={action.action_id}
+                aria-label={action.label}
+                disabled={disabled}
+                onClick={() => onSelectAction(action.action_id)}
+              >{body}</Selectable>
+            );
+          }
+          return <span key={company.company_id}>{body}</span>;
         })}
       </div>
     </section>
@@ -103,7 +170,12 @@ function Market({ view, movements, onAction, disabled }: {
 
 function InformationPair({ card, companies }: { card: Card; companies: Company[] }) {
   if (card.visibility === "hidden") {
-    return <div className={styles.informationPair}><CardView card={card} companies={companies} scale="information" /><CardView card={card} companies={companies} scale="information" /></div>;
+    return (
+      <div className={styles.informationPair}>
+        <CardView card={card} companies={companies} scale="information" />
+        <CardView card={card} companies={companies} scale="information" />
+      </div>
+    );
   }
   if (card.kind !== "company_forecast") return null;
   const company = companies.find((candidate) => candidate.company_id === card.company_id);
@@ -115,37 +187,15 @@ function InformationPair({ card, companies }: { card: Card; companies: Company[]
   );
 }
 
-function MarketInformation({ view, visibility }: { view: GameView; visibility: "private" | "public" }) {
-  const privateSlots = view.private.market_information.filter((slot) => slot.visibility === "private");
-  const publicSlots = view.private.market_information.filter((slot) => slot.visibility === "public");
-  const hiddenSlots = view.private.market_information.filter((slot) => slot.visibility === "hidden");
-  const completedRoundReveals = visibility === "public" && view.checkpoint?.kind === "round_result"
-    ? view.recent_events.filter((event) => event.round === view.checkpoint?.round && event.company_id !== null && event.forecast !== null)
-      .map((event) => ({
-        visibility: "public" as const,
-        card: {
-          visibility: "visible" as const,
-          kind: "company_forecast" as const,
-          company_id: event.company_id!,
-          company: companyById(view, event.company_id)?.name ?? "",
-          forecast: event.forecast!,
-          cash_effect_thousands: event.cash_effect_thousands,
-        },
-      }))
-    : [];
-  const publicByFact = new Map<string, (typeof publicSlots)[number]>();
-  for (const slot of [...publicSlots, ...completedRoundReveals]) {
-    if (slot.card.visibility === "hidden") continue;
-    publicByFact.set(`${slot.card.company_id}:${slot.card.forecast}`, slot);
-  }
-  const visiblePublic = [...publicByFact.values()];
-  const slots = visibility === "private"
-    ? privateSlots
-    : [...visiblePublic, ...hiddenSlots.slice(0, Math.max(0, view.companies.length - visiblePublic.length))];
-  const label = visibility.toUpperCase();
+function Research({ view, served }: { view: GameView; served: boolean }) {
+  const slots = view.private.market_information.filter((slot) => slot.visibility === "private");
   return (
-    <section className={`${styles.module} ${visibility === "private" ? styles.privateInformation : styles.publicInformation}`} aria-label={`${label[0]}${label.slice(1).toLowerCase()} information`}>
-      <SectionLabel>{label}</SectionLabel>
+    <section
+      className={`${styles.module} ${styles.research} ${served ? styles.whiteOutRegion : ""}`}
+      aria-label="Research"
+      data-white-out={served || undefined}
+    >
+      <SectionLabel>RESEARCH</SectionLabel>
       <div className={styles.informationList}>
         {slots.map((slot, index) => <InformationPair key={index} card={slot.card} companies={view.companies} />)}
       </div>
@@ -158,41 +208,59 @@ function visiblePileCard(card: PileCard, expanded: boolean): { card: Card; faceD
   if (!expanded) return { card: { visibility: "hidden" }, faceDownKnown: false };
   return { card: card.card, faceDownKnown: true };
 }
-
-function StackEdge({ card, companies }: { card: Card; companies: Company[] }) {
-  if (card.visibility === "hidden") return null;
-  if (card.kind === "stock") {
-    const company = companies.find((candidate) => candidate.company_id === card.company_id);
-    return company ? <StockPattern pattern={company.pattern} /> : null;
-  }
-  if (card.kind === "trading_fee") return <span className={styles.negative}>−$</span>;
-  if (card.kind === "action") return <span className={card.direction === "up" ? styles.positive : styles.negative}>{card.direction === "up" ? "↑" : "↓"}</span>;
-  if (card.forecast === "DIVIDEND") return <span className={styles.positive}>+$</span>;
-  if (card.forecast > 0) return <span className={styles.positive}>↑</span>;
-  if (card.forecast < 0) return <span className={styles.negative}>↓</span>;
-  return <span>0</span>;
+function isFaceDown(card: PileCard) {
+  return card.visibility === "hidden" || card.visibility === "remembered";
 }
 
-function Stack({ cards, companies, expanded }: { cards: PileCard[]; companies: Company[]; expanded: boolean }) {
+function Stack({ cards, tentative, companies, expanded, onUndoTentative }: {
+  cards: PileCard[];
+  tentative: TentativePlacement[];
+  companies: Company[];
+  expanded: boolean;
+  onUndoTentative: (cardRef: string) => void;
+}) {
+  const entries = [
+    ...cards.map((card) => ({ card, tentative: null as TentativePlacement | null })),
+    ...tentative.map((placement) => ({
+      card: placement.visibility === "face_down" ? ({ visibility: "hidden" } as const) : placement.card,
+      tentative: placement,
+    })),
+  ];
+  if (!entries.length) {
+    return (
+      <span className={styles.stack} style={{ "--stack-count": 1 } as CSSProperties}>
+        <span className={styles.stackLayer} data-empty-stockpile>
+          <CardFrame aria-label="Empty stockpile" className={styles.blankCard} scale="stockpile" />
+        </span>
+      </span>
+    );
+  }
   return (
-    <span
-      className={`${styles.stack} ${expanded ? styles.stackExpanded : ""}`}
-      style={{ "--stack-count": Math.max(cards.length, 1) } as CSSProperties}
-    >
-      {cards.map((entry, index) => {
+    <span className={`${styles.stack} ${expanded ? styles.stackExpanded : ""}`} style={{ "--stack-count": Math.max(entries.length, 1) } as CSSProperties}>
+      {entries.map(({ card: entry, tentative: tentativeEntry }, index) => {
+        const detailed = expanded || index === entries.length - 1;
         const display = visiblePileCard(entry, expanded);
         return (
           <span
-            key={index}
-            className={styles.stackLayer}
+            key={tentativeEntry?.cardRef ?? `server:${index}`}
+            className={`${styles.stackLayer} ${tentativeEntry ? styles.whiteOutObject : ""}`}
             data-stack-card
             data-stack-order={index}
+            data-tentative-card-ref={tentativeEntry?.cardRef}
+            data-white-out={tentativeEntry ? true : undefined}
+            data-card-edge={!detailed ? (isFaceDown(entry) ? "blue" : "white") : undefined}
             style={{ "--stack-index": index, zIndex: index + 1 } as CSSProperties}
+            onClick={tentativeEntry ? (event) => event.stopPropagation() : undefined}
+            onDoubleClick={tentativeEntry ? (event) => {
+              event.stopPropagation();
+              onUndoTentative(tentativeEntry.cardRef);
+            } : undefined}
           >
-            <CardView card={display.card} companies={companies} scale="stockpile" faceDownKnown={display.faceDownKnown} />
-            {!expanded && index < cards.length - 1 && (display.card.visibility === "hidden"
-              ? <span className={styles.hiddenStackEdge} aria-hidden="true" />
-              : <span className={styles.stackEdge} aria-hidden="true"><StackEdge card={display.card} companies={companies} /></span>)}
+            {detailed
+              ? <CardView card={display.card} companies={companies} scale="stockpile" faceDownKnown={display.faceDownKnown} />
+              : isFaceDown(entry)
+                ? <CardView card={{ visibility: "hidden" }} companies={companies} scale="stockpile" />
+                : <CardFrame aria-label="Face-up card edge" className={styles.blankCard} scale="stockpile" />}
           </span>
         );
       })}
@@ -205,64 +273,101 @@ function bidderName(view: GameView, pile: Stockpile) {
   return pile.bid.player_id === view.viewer.player_id ? "YOU" : "COMPUTER";
 }
 
-function StockpileItem({ pile, view, action, supplyTarget, supplySelected, expanded, onAction, onSupplyPile, onInspect, disabled }: {
+function StockpileItem({ pile, view, tentative, selectable, selected, expanded, onSelect, onInspect, onUndoTentative, disabled }: {
   pile: Stockpile;
   view: GameView;
-  action?: LegalAction;
-  supplyTarget: boolean;
-  supplySelected: boolean;
+  tentative: TentativePlacement[];
+  selectable: boolean;
+  selected: boolean;
   expanded: boolean;
-  onAction: (actionId: number) => void;
-  onSupplyPile: (stockpileId: number) => void;
+  onSelect: () => void;
   onInspect: (stockpileId: number) => void;
+  onUndoTentative: (cardRef: string) => void;
   disabled: boolean;
 }) {
-  const selected = supplySelected || view.pending_decision.selected_stockpile_id === pile.stockpile_id;
-  const target = supplyTarget || Boolean(action);
+  const clickTimer = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (clickTimer.current !== null) window.clearTimeout(clickTimer.current);
+  }, []);
+
+  function select() {
+    if (!disabled && selectable) onSelect();
+  }
+  function delayedSelect(event: ReactMouseEvent) {
+    if (!selectable || event.detail > 1) {
+      if (clickTimer.current !== null) window.clearTimeout(clickTimer.current);
+      clickTimer.current = null;
+      return;
+    }
+    clickTimer.current = window.setTimeout(() => {
+      select();
+      clickTimer.current = null;
+    }, 200);
+  }
+  function inspect(event: ReactMouseEvent) {
+    if (clickTimer.current !== null) window.clearTimeout(clickTimer.current);
+    clickTimer.current = null;
+    event.preventDefault();
+    onInspect(pile.stockpile_id);
+  }
+
   return (
-    <article className={styles.stockpile} aria-label={`Stockpile ${pile.stockpile_id + 1}`} data-stockpile-id={pile.stockpile_id}>
-      {target && (
+    <article
+      className={`${styles.stockpile} ${selected ? styles.stockpileSelected : ""} ${pile.resolved ? styles.whiteOutRegion : ""}`}
+      aria-label={`Stockpile ${pile.stockpile_id + 1}`}
+      data-stockpile-id={pile.stockpile_id}
+      data-white-out={pile.resolved || undefined}
+    >
+      {selectable && (
         <button
           type="button"
           className={styles.pileTarget}
-          data-supply-pile-target={supplyTarget ? pile.stockpile_id : undefined}
-          data-action-id={action?.action_id}
-          aria-label={supplyTarget ? `Place selected card in stockpile ${pile.stockpile_id + 1}` : action?.label}
+          data-stockpile-target={pile.stockpile_id}
+          aria-label="Select stockpile"
           aria-pressed={selected}
           disabled={disabled}
-          onClick={() => supplyTarget ? onSupplyPile(pile.stockpile_id) : action && onAction(action.action_id)}
+          onClick={delayedSelect}
+          onDoubleClick={inspect}
         />
       )}
-      <button
-        type="button"
+      <div
         className={styles.stackInspect}
         data-stack-inspect={pile.stockpile_id}
-        aria-label={`${expanded ? "Collapse" : "Expand"} stockpile ${pile.stockpile_id + 1}`}
+        aria-label={selectable
+          ? `Select stockpile; double-click to ${expanded ? "collapse" : "expand"}`
+          : `Double-click or press Enter to ${expanded ? "collapse" : "expand"} stockpile`}
         aria-expanded={expanded}
-        onClick={() => onInspect(pile.stockpile_id)}
+        aria-keyshortcuts={selectable ? "Enter Space Shift+Enter" : "Enter Space"}
+        role="button"
+        tabIndex={0}
+        onClick={delayedSelect}
+        onDoubleClick={inspect}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            if (selectable && !event.shiftKey) select();
+            else onInspect(pile.stockpile_id);
+          }
+        }}
       >
-        <Stack cards={pile.cards_bottom_to_top} companies={view.companies} expanded={expanded} />
-      </button>
+        <Stack cards={pile.cards_bottom_to_top} tentative={tentative} companies={view.companies} expanded={expanded} onUndoTentative={onUndoTentative} />
+      </div>
       {pile.bid && <span className={styles.bid}>{bidderName(view, pile)} {money(pile.bid.amount_thousands)}</span>}
     </article>
   );
 }
 
-function StockpileField({ view, expanded, onInspect, onAction, disabled, supplyTargets, selectedSupplyPile, onSupplyPile }: {
+function StockpileField({ view, expanded, selectedStockpileId, selectablePiles, tentativeByPile, onSelectPile, onInspect, onUndoTentative, disabled }: {
   view: GameView;
   expanded: Set<number>;
+  selectedStockpileId: number | null;
+  selectablePiles: Set<number>;
+  tentativeByPile: Map<number, TentativePlacement[]>;
+  onSelectPile: (stockpileId: number) => void;
   onInspect: (stockpileId: number) => void;
-  onAction: (actionId: number) => void;
+  onUndoTentative: (cardRef: string) => void;
   disabled: boolean;
-  supplyTargets: Set<number>;
-  selectedSupplyPile: number | null;
-  onSupplyPile: (stockpileId: number) => void;
 }) {
-  const actions = new Map<number, LegalAction>();
-  for (const action of view.legal_actions.filter((candidate) => candidate.control === "stockpile")) {
-    const pileId = targetNumber(action.target_id, "stockpile");
-    if (pileId !== null) actions.set(pileId, action);
-  }
   return (
     <main className={`${styles.module} ${styles.stockpileField}`} aria-label="Stockpiles" data-testid="stockpile-field">
       <div className={styles.stockpileGrid}>
@@ -271,13 +376,13 @@ function StockpileField({ view, expanded, onInspect, onAction, disabled, supplyT
             key={pile.stockpile_id}
             pile={pile}
             view={view}
-            action={actions.get(pile.stockpile_id)}
-            supplyTarget={supplyTargets.has(pile.stockpile_id)}
-            supplySelected={selectedSupplyPile === pile.stockpile_id}
+            tentative={tentativeByPile.get(pile.stockpile_id) ?? []}
+            selectable={selectablePiles.has(pile.stockpile_id)}
+            selected={selectedStockpileId === pile.stockpile_id || view.pending_decision.selected_stockpile_id === pile.stockpile_id}
             expanded={expanded.has(pile.stockpile_id)}
-            onAction={onAction}
-            onSupplyPile={onSupplyPile}
+            onSelect={() => onSelectPile(pile.stockpile_id)}
             onInspect={onInspect}
+            onUndoTentative={onUndoTentative}
             disabled={disabled}
           />
         ))}
@@ -286,14 +391,18 @@ function StockpileField({ view, expanded, onInspect, onAction, disabled, supplyT
   );
 }
 
-function Portfolio({ view }: { view: GameView }) {
+function Portfolio({ view, served }: { view: GameView; served: boolean }) {
   return (
     <section className={`${styles.module} ${styles.portfolio}`} aria-label="Portfolio">
       <SectionLabel>PORTFOLIO</SectionLabel>
       <div className={styles.portfolioCards}>
         {view.private.holdings.filter((holding) => holding.shares_thousands > 0).map((holding) => {
           const company = companyById(view, holding.company_id);
-          return company ? <HoldingCard key={holding.company_id} company={company} sharesThousands={holding.shares_thousands} /> : null;
+          return company ? (
+            <span key={holding.company_id} className={served ? styles.whiteOutObject : ""} data-white-out={served || undefined}>
+              <HoldingCard company={company} sharesThousands={holding.shares_thousands} />
+            </span>
+          ) : null;
         })}
       </div>
     </section>
@@ -331,186 +440,239 @@ function planMatchesDraft(plan: SupplyBatch["plans"][number], draft: SupplyDraft
     return true;
   });
 }
-
 function planMatchesPileAssignments(plan: SupplyBatch["plans"][number], draft: SupplyDraft) {
   return Object.entries(draft).every(([cardRef, assignment]) => {
     if (assignment.stockpile_id === undefined) return true;
     return plan.placements.some((placement) => placement.card_ref === cardRef && placement.stockpile_id === assignment.stockpile_id);
   });
 }
-
 function exactSupplyPlan(batch: SupplyBatch, draft: SupplyDraft) {
-  return batch.plans.find((plan) => batch.cards.every(({ card_ref }) => {
-    const assignment = draft[card_ref];
-    const placement = plan.placements.find((candidate) => candidate.card_ref === card_ref);
-    return assignment?.stockpile_id !== undefined && assignment.visibility !== undefined && placement?.stockpile_id === assignment.stockpile_id && placement.visibility === assignment.visibility;
+  return batch.plans.find((plan) => plan.placements.every((placement) => {
+    const assignment = draft[placement.card_ref];
+    return assignment?.stockpile_id === placement.stockpile_id && assignment.visibility === placement.visibility;
   }));
 }
-
-function SupplyDock({ view, draft, selectedCardRef, setSelectedCardRef, setDraft, onConfirm, disabled }: {
-  view: GameView;
-  draft: SupplyDraft;
-  selectedCardRef: string | null;
-  setSelectedCardRef: (cardRef: string) => void;
-  setDraft: (updater: (current: SupplyDraft) => SupplyDraft) => void;
-  onConfirm: (planId: string) => void;
-  disabled: boolean;
-}) {
-  const batch = view.supply_batch!;
-  const selected = batch.cards.find((item) => item.card_ref === selectedCardRef);
-  const allowedVisibility = new Set(selected ? batch.plans
-    .filter((plan) => planMatchesPileAssignments(plan, draft))
-    .map((plan) => plan.placements.find((placement) => placement.card_ref === selected.card_ref)?.visibility)
-    .filter((value): value is SupplyPlacement["visibility"] => value !== undefined) : []);
-  const complete = exactSupplyPlan(batch, draft);
-
-  function chooseVisibility(visibility: SupplyPlacement["visibility"]) {
-    if (!selected) return;
-    const matchingPlan = batch.plans.find((plan) =>
-      planMatchesPileAssignments(plan, draft)
-      && plan.placements.some((placement) => placement.card_ref === selected.card_ref && placement.visibility === visibility)
-    );
-    if (!matchingPlan) return;
-    setDraft((current) => {
-      const next = { ...current };
-      for (const placement of matchingPlan.placements) {
-        next[placement.card_ref] = {
-          ...next[placement.card_ref],
-          visibility: placement.visibility,
-        };
-      }
-      return next;
-    });
+function tentativePlacements(batch: SupplyBatch | null, draft: SupplyDraft) {
+  const byPile = new Map<number, TentativePlacement[]>();
+  if (!batch) return byPile;
+  const compatible = batch.plans.find((plan) => planMatchesDraft(plan, draft));
+  const ordered = compatible?.placements ?? batch.cards.map(({ card_ref }) => ({
+    card_ref,
+    stockpile_id: draft[card_ref]?.stockpile_id ?? -1,
+    visibility: draft[card_ref]?.visibility ?? "face_up" as const,
+  }));
+  for (const placement of ordered) {
+    const assignment = draft[placement.card_ref];
+    const card = batch.cards.find((candidate) => candidate.card_ref === placement.card_ref)?.card;
+    if (!card || assignment?.stockpile_id === undefined || !assignment.visibility) continue;
+    const current = byPile.get(assignment.stockpile_id) ?? [];
+    current.push({ cardRef: placement.card_ref, card, visibility: assignment.visibility });
+    byPile.set(assignment.stockpile_id, current);
   }
-
-  return (
-    <>
-      <div className={styles.dockHeading}><SectionLabel>ACTION</SectionLabel><span>{selected ? "PLACE" : "SELECT CARD"}</span></div>
-      <div className={styles.dockContents}>
-        {batch.cards.map(({ card_ref, card }) => {
-          const assignment = draft[card_ref];
-          return (
-            <Selectable
-              key={card_ref}
-              selected={selectedCardRef === card_ref}
-              className={styles.cardAction}
-              data-supply-card-ref={card_ref}
-              data-assigned-pile={assignment?.stockpile_id}
-              data-assigned-visibility={assignment?.visibility}
-              aria-label={`Supply card ${card_ref}`}
-              disabled={disabled}
-              onClick={() => setSelectedCardRef(card_ref)}
-            >
-              <CardView card={card} companies={view.companies} scale="active" />
-              {assignment?.stockpile_id !== undefined && assignment.visibility && <span className={styles.assignment}>PILE {assignment.stockpile_id + 1} · {assignment.visibility === "face_up" ? "FACE UP" : "FACE DOWN"}</span>}
-            </Selectable>
-          );
-        })}
-        {selected && (["face_up", "face_down"] as const).map((visibility) => allowedVisibility.has(visibility) && (
-          <TextButton
-            key={visibility}
-            selected={draft[selected.card_ref]?.visibility === visibility}
-            data-supply-visibility={visibility}
-            disabled={disabled}
-            onClick={() => chooseVisibility(visibility)}
-          >
-            {visibility === "face_up" ? "FACE UP" : "FACE DOWN"}
-          </TextButton>
-        ))}
-        {complete && <TextButton data-supply-confirm data-plan-id={complete.plan_id} disabled={disabled} onClick={() => onConfirm(complete.plan_id)}>CONFIRM</TextButton>}
-      </div>
-    </>
-  );
+  return byPile;
 }
 
-function prompt(view: GameView) {
-  const human = view.players.find((player) => player.role === "human");
-  const rebid = human?.bid_markers.some((marker) => marker.status === "outbid" || marker.status === "rebidding");
+function prompt(view: GameView, supply: SupplyUi, decision: DecisionUi) {
+  if (view.supply_batch) {
+    if (!supply.selectedCardRef) return "SELECT CARD";
+    const assignment = supply.draft[supply.selectedCardRef];
+    if (assignment?.stockpile_id === undefined) return "SELECT PILE";
+    if (!assignment.visibility) return "FACE";
+    return "SELECT CARD";
+  }
+  if (view.decision_batch?.kind === "demand") return decision.stockpileId === null ? "SELECT PILE" : decision.planId === null ? "BID" : "";
+  if (view.decision_batch?.kind === "market_impact") return decision.direction === null ? "SELECT CARD" : decision.planId === null ? "SELECT COMPANY" : "";
   switch (view.pending_decision.kind) {
-    case "bid_pile": return rebid ? "REBID" : "SELECT PILE";
-    case "bid_amount": return rebid ? "REBID" : "BID";
-    case "action_card": return "SELECT CARD";
-    case "action_company": return "SELECT COMPANY";
     case "sell": return "SELL?";
     case "dividend_claim": return "DIVIDEND";
-    case "acknowledge": return "CONTINUE";
     case "waiting":
     case "private_selling": return "WAIT";
     case "terminal": return "";
-    case "supply": return "SELECT CARD";
-    case "generic": return view.legal_actions.length ? "CONTINUE" : "WAIT";
+    default: return view.legal_actions.length ? "SELECT" : "WAIT";
   }
 }
-
 function actionText(action: LegalAction) {
-  if (action.control === "bid" && action.amount_thousands !== null) return money(action.amount_thousands);
   if (action.amount_thousands !== null) return money(action.amount_thousands);
   return action.label.toUpperCase();
 }
 
-function ActionDock({ view, draft, selectedCardRef, setSelectedCardRef, setDraft, onAction, onSupply, onAcknowledge, disabled }: {
+function SupplyContents({ view, supply, onSelectCard, onVisibility, onUndoCard, disabled }: {
   view: GameView;
-  draft: SupplyDraft;
-  selectedCardRef: string | null;
-  setSelectedCardRef: (cardRef: string) => void;
-  setDraft: (updater: (current: SupplyDraft) => SupplyDraft) => void;
-  onAction: (actionId: number) => void;
-  onSupply: (planId: string) => void;
-  onAcknowledge: (checkpointId: string) => void;
+  supply: SupplyUi;
+  onSelectCard: (cardRef: string) => void;
+  onVisibility: (visibility: SupplyPlacement["visibility"]) => void;
+  onUndoCard: (cardRef: string) => void;
   disabled: boolean;
 }) {
-  if (view.checkpoint) {
-    return (
-      <section className={`${styles.module} ${styles.actionDock}`} aria-label="Action dock">
-        <div className={styles.dockHeading}><SectionLabel>ACTION</SectionLabel></div>
-        <div className={styles.dockContents}>
-          <TextButton data-checkpoint-continue data-checkpoint-kind={view.checkpoint.kind} disabled={disabled} onClick={() => onAcknowledge(view.checkpoint!.checkpoint_id)}>CONTINUE</TextButton>
-        </div>
-      </section>
-    );
-  }
-  if (view.supply_batch) {
-    return <section className={`${styles.module} ${styles.actionDock}`} aria-label="Action dock"><SupplyDock view={view} draft={draft} selectedCardRef={selectedCardRef} setSelectedCardRef={setSelectedCardRef} setDraft={setDraft} onConfirm={onSupply} disabled={disabled} /></section>;
-  }
-  if (view.terminal_results) {
-    return <section className={`${styles.module} ${styles.actionDock}`} aria-label="Action dock"><SectionLabel>ACTION</SectionLabel><div className={styles.dockContents}><TextButton onClick={() => window.location.assign("/")}>NEW GAME</TextButton></div></section>;
-  }
+  const batch = view.supply_batch!;
+  const selected = batch.cards.find((item) => item.card_ref === supply.selectedCardRef);
+  const selectedAssignment = selected ? supply.draft[selected.card_ref] : undefined;
+  const allowedVisibility = new Set(selected && selectedAssignment?.stockpile_id !== undefined
+    ? batch.plans
+      .filter((plan) => planMatchesDraft(plan, supply.draft, { cardRef: selected.card_ref, field: "visibility" }))
+      .map((plan) => plan.placements.find((placement) => placement.card_ref === selected.card_ref)?.visibility)
+      .filter((value): value is SupplyPlacement["visibility"] => value !== undefined)
+    : []);
+  return (
+    <>
+      {batch.cards.map(({ card_ref, card }) => {
+        const assignment = supply.draft[card_ref];
+        const complete = assignment?.stockpile_id !== undefined && assignment.visibility !== undefined;
+        return (
+          <Selectable
+            key={card_ref}
+            selected={supply.selectedCardRef === card_ref}
+            className={`${styles.cardAction} ${complete ? styles.whiteOutObject : ""}`}
+            data-supply-card-ref={card_ref}
+            data-assigned-pile={assignment?.stockpile_id}
+            data-assigned-visibility={assignment?.visibility}
+            data-white-out={complete || undefined}
+            aria-label={`Supply card ${card_ref}`}
+            disabled={disabled}
+            onClick={() => { if (!complete) onSelectCard(card_ref); }}
+            onDoubleClick={(event) => {
+              if (!complete) return;
+              event.preventDefault();
+              onUndoCard(card_ref);
+            }}
+          >
+            <CardView card={card} companies={view.companies} scale="active" />
+          </Selectable>
+        );
+      })}
+      {selected && selectedAssignment?.stockpile_id !== undefined && (["face_up", "face_down"] as const).map((visibility) => allowedVisibility.has(visibility) && (
+        <TextButton key={visibility} selected={selectedAssignment.visibility === visibility} data-supply-visibility={visibility} disabled={disabled} onClick={() => onVisibility(visibility)}>
+          {visibility === "face_up" ? "FACE UP" : "FACE DOWN"}
+        </TextButton>
+      ))}
+    </>
+  );
+}
 
-  const inline = view.legal_actions.filter((action) => action.control !== "stockpile" && action.control !== "company");
-  const selectedImpact = view.private.available_action_cards.find((card) => card.effect.toLowerCase() === view.pending_decision.selected_action_effect?.toLowerCase());
-  const selectedHolding = view.private.holdings.find((holding) => holding.company_id === view.pending_decision.company_id);
-  const holdingCompany = selectedHolding ? companyById(view, selectedHolding.company_id) : undefined;
+function DecisionContents({ view, decision, onDirection, onPlan, onAction, disabled }: {
+  view: GameView;
+  decision: DecisionUi;
+  onDirection: (direction: "up" | "down") => void;
+  onPlan: (planId: string) => void;
+  onAction: (actionId: number) => void;
+  disabled: boolean;
+}) {
+  if (view.decision_batch?.kind === "demand") {
+    if (decision.stockpileId === null) return null;
+    return <>{view.decision_batch.plans.filter((plan) => plan.stockpile_id === decision.stockpileId).map((plan) => (
+      <TextButton key={plan.plan_id} selected={decision.planId === plan.plan_id} data-decision-plan-id={plan.plan_id} disabled={disabled} onClick={() => onPlan(plan.plan_id)}>
+        {money(plan.amount_thousands)}
+      </TextButton>
+    ))}</>;
+  }
+  if (view.decision_batch?.kind === "market_impact") {
+    const directions = [...new Set(view.decision_batch.plans.map((plan) => plan.direction))];
+    const displayedDirections = decision.direction === null ? directions : [decision.direction];
+    return <>{displayedDirections.map((direction) => {
+        const card = view.private.available_action_cards.find((candidate) => candidate.direction === direction);
+        return (
+          <Selectable key={direction} className={styles.cardAction} selected={decision.direction === direction} data-impact-direction={direction} aria-label={direction === "up" ? "Stock Boom" : "Stock Bust"} disabled={disabled} onClick={() => onDirection(direction)}>
+            {card ? <CardView card={card} companies={view.companies} scale="active" /> : direction === "up" ? "↑2" : "↓2"}
+          </Selectable>
+        );
+      })}</>;
+  }
+  return <>{view.legal_actions.map((action) => {
+    if (action.control === "company" || action.control === "stockpile") return null;
+    if (action.control === "action_card") {
+      const card = view.private.available_action_cards.find((candidate) => candidate.direction === action.direction);
+      return (
+        <Selectable key={action.action_id} className={styles.cardAction} selected={decision.actionId === action.action_id} data-action-id={action.action_id} aria-label={action.label} disabled={disabled} onClick={() => onAction(action.action_id)}>
+          {card ? <CardView card={card} companies={view.companies} scale="active" /> : actionText(action)}
+        </Selectable>
+      );
+    }
+    if (action.control === "sell" && action.sale_preview) {
+      const sale = action.sale_preview;
+      return (
+        <TextButton key={action.action_id} selected={decision.actionId === action.action_id} data-action-id={action.action_id} aria-label={action.label} disabled={disabled} onClick={() => onAction(action.action_id)}>
+          {sale.shares_thousands === 0 ? "HOLD" : <><span>SELL {sale.shares_thousands}K</span> <span className={styles.positive}>+{money(sale.gross_value_thousands)}</span></>}
+        </TextButton>
+      );
+    }
+    return (
+      <TextButton key={action.action_id} selected={decision.actionId === action.action_id} data-action-id={action.action_id} aria-label={action.label} disabled={disabled} onClick={() => onAction(action.action_id)}>
+        {actionText(action)}
+      </TextButton>
+    );
+  })}</>;
+}
+
+function ActionDock({ view, supply, decision, contextLabel, contextEnabled, contextPlanId, contextActionId, onContext, onResign, resignArmed, onSupplyCard, onSupplyVisibility, onUndoSupplyCard, onDirection, onPlan, onAction, disabled, contentDisabled }: {
+  view: GameView;
+  supply: SupplyUi;
+  decision: DecisionUi;
+  contextLabel: string;
+  contextEnabled: boolean;
+  contextPlanId?: string;
+  contextActionId?: number;
+  onContext: () => void;
+  onResign: () => void;
+  resignArmed: boolean;
+  onSupplyCard: (cardRef: string) => void;
+  onSupplyVisibility: (visibility: SupplyPlacement["visibility"]) => void;
+  onUndoSupplyCard: (cardRef: string) => void;
+  onDirection: (direction: "up" | "down") => void;
+  onPlan: (planId: string) => void;
+  onAction: (actionId: number) => void;
+  disabled: boolean;
+  contentDisabled: boolean;
+}) {
   return (
     <section className={`${styles.module} ${styles.actionDock}`} aria-label="Action dock">
-      <div className={styles.dockHeading}><SectionLabel>ACTION</SectionLabel><span>{prompt(view)}</span></div>
+      <div className={styles.dockHeading}><SectionLabel>ACTION</SectionLabel><span>{view.checkpoint ? "" : prompt(view, supply, decision)}</span></div>
       <div className={styles.dockContents}>
-        {selectedImpact && <CardView card={selectedImpact} companies={view.companies} scale="active" />}
-        {view.pending_decision.kind === "sell" && selectedHolding && holdingCompany && <HoldingCard company={holdingCompany} sharesThousands={selectedHolding.shares_thousands} scale="active" />}
-        {inline.map((action) => {
-          if (action.control === "action_card") {
-            const effect = action.target_id?.split(":")[1]?.toLowerCase();
-            const card = view.private.available_action_cards.find((candidate) => candidate.effect.toLowerCase() === effect);
-            return (
-              <Selectable key={action.action_id} className={styles.cardAction} data-action-id={action.action_id} aria-label={action.label} disabled={disabled} onClick={() => onAction(action.action_id)}>
-                {card ? <CardView card={card} companies={view.companies} scale="active" /> : actionText(action)}
-              </Selectable>
-            );
-          }
-          if (action.control === "sell" && action.sale_preview) {
-            const sale = action.sale_preview;
-            return (
-              <TextButton key={action.action_id} data-action-id={action.action_id} aria-label={action.label} disabled={disabled} onClick={() => onAction(action.action_id)}>
-                {sale.shares_thousands === 0 ? "HOLD" : <><span>SELL {sale.shares_thousands}K</span> <span className={styles.positive}>+{money(sale.gross_value_thousands)}</span></>}
-              </TextButton>
-            );
-          }
-          if (action.control === "dividend") {
-            return <TextButton key={action.action_id} data-action-id={action.action_id} aria-label={action.label} disabled={disabled} onClick={() => onAction(action.action_id)}>{action.label.toUpperCase()}</TextButton>;
-          }
-          return <TextButton key={action.action_id} data-action-id={action.action_id} aria-label={action.label} disabled={disabled} onClick={() => onAction(action.action_id)}>{actionText(action)}</TextButton>;
-        })}
+        {view.supply_batch ? (
+          <SupplyContents view={view} supply={supply} onSelectCard={onSupplyCard} onVisibility={onSupplyVisibility} onUndoCard={onUndoSupplyCard} disabled={contentDisabled} />
+        ) : !view.checkpoint && !view.terminal_results ? (
+          <DecisionContents view={view} decision={decision} onDirection={onDirection} onPlan={onPlan} onAction={onAction} disabled={contentDisabled} />
+        ) : null}
+      </div>
+      <div className={styles.dockControls}>
+        <span className={styles.controlSlot}>
+          <TextButton data-dock-control="context" data-context-action={contextLabel.toLowerCase().replace(" ", "-")} data-resign-confirm={resignArmed || undefined} data-plan-id={contextPlanId} data-action-id={contextActionId} data-checkpoint-id={view.checkpoint?.checkpoint_id} data-checkpoint-kind={view.checkpoint?.kind} disabled={disabled || !contextEnabled} onClick={onContext}>{contextLabel}</TextButton>
+        </span>
+        <TextButton selected={resignArmed} data-dock-control="resign" data-resign disabled={disabled} onClick={onResign}>RESIGN</TextButton>
       </div>
     </section>
+  );
+}
+
+function TerminalChart({ view }: { view: GameView }) {
+  const results = view.terminal_results!;
+  const minimum = Math.min(0, ...results.players.map((player) => player.cash_before_liquidation_thousands));
+  const maximum = Math.max(0, ...results.players.flatMap((player) => [
+    player.liquidation_value_thousands,
+    player.final_cash_thousands,
+    player.liquidation_value_thousands + Math.max(0, player.cash_before_liquidation_thousands),
+  ]));
+  const span = Math.max(1, maximum - minimum);
+  const percent = (value: number) => `${(value / span) * 100}%`;
+  const zero = -minimum;
+  return (
+    <div className={styles.terminalChart} data-testid="terminal-chart" data-chart-min={minimum} data-chart-max={maximum}>
+      {results.players.map((player) => {
+        const cash = player.cash_before_liquidation_thousands;
+        const position = player.liquidation_value_thousands;
+        return (
+          <div className={styles.chartRow} key={player.player_id}>
+            <span>{player.player_id === view.viewer.player_id ? "YOU" : "COMPUTER"}</span>
+            <span className={styles.chartTrack} role="img" aria-label={`${player.player_name}: position ${money(position)}, cash ${money(cash)}, final cash ${money(player.final_cash_thousands)}`}>
+              <span className={styles.positionSegment} data-chart-segment="position" style={{ left: percent(zero), width: percent(position) }} />
+              <span className={styles.cashSegment} data-chart-segment="cash" style={cash >= 0
+                ? { left: percent(zero + position), width: percent(cash) }
+                : { left: percent(zero + cash), width: percent(-cash) }} />
+              <span className={styles.zeroLine} style={{ left: percent(zero) }} />
+            </span>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -525,7 +687,6 @@ function TerminalField({ view }: { view: GameView }) {
             <span>#{player.rank}</span>
             <span>{player.player_id === view.viewer.player_id ? "YOU" : "COMPUTER"}</span>
             <span>FINAL CASH {money(player.final_cash_thousands)}</span>
-            {player.winner && <span>WINNER</span>}
             <div className={styles.liquidation}>
               <span>CASH {money(player.cash_before_liquidation_thousands)}</span>
               <span>LIQUIDATION <span className={styles.positive}>+{money(player.liquidation_value_thousands)}</span></span>
@@ -537,6 +698,7 @@ function TerminalField({ view }: { view: GameView }) {
           </div>
         ))}
       </div>
+      <TerminalChart view={view} />
     </main>
   );
 }
@@ -548,22 +710,33 @@ function currentMovements(view: GameView) {
   return events.filter((event) => event.round === last.round && event.cause === last.cause);
 }
 
-export function GamePage({ gameId, token }: { gameId: string; token: string }) {
-  const { view, error, submitting, act, supply, acknowledge } = useGameSession(gameId, token);
+function isHumanDecision(view: GameView) {
+  return view.active_player_id === view.viewer.player_id
+    && !view.checkpoint
+    && !view.terminal_results
+    && view.pending_decision.kind !== "waiting"
+    && view.pending_decision.kind !== "private_selling"
+    && Boolean(view.supply_batch || view.decision_batch || view.legal_actions.length);
+}
+
+export function GamePage({ gameId, token, navigate = (url: string) => window.location.assign(url) }: { gameId: string; token: string; navigate?: (url: string) => void }) {
+  const { view: liveView, error, submitting, act, supply, decision: commitDecision, acknowledge, resign } = useGameSession(gameId, token);
   const [expandedPiles, setExpandedPiles] = useState<Set<number>>(new Set());
-  const [selectedSupplyCard, setSelectedSupplyCard] = useState<string | null>(null);
-  const [supplyDraft, setSupplyDraft] = useState<SupplyDraft>({});
-  const supplyKey = view?.supply_batch?.cards.map((card) => card.card_ref).join(":") ?? "";
+  const [supplyUi, setSupplyUi] = useState<SupplyUi>(EMPTY_SUPPLY);
+  const [decisionUi, setDecisionUi] = useState<DecisionUi>(EMPTY_DECISION);
+  const [backView, setBackView] = useState<GameView | null>(null);
+  const [showBackView, setShowBackView] = useState(false);
+  const [resignArmed, setResignArmed] = useState(false);
+  const supplyKey = liveView?.supply_batch?.cards.map((card) => card.card_ref).join(":") ?? "";
+  const decisionKey = liveView ? `${liveView.revision}:${liveView.decision_batch?.kind ?? liveView.pending_decision.kind}` : "";
 
-  useEffect(() => {
-    setSelectedSupplyCard(null);
-    setSupplyDraft({});
-  }, [supplyKey]);
+  useEffect(() => { setSupplyUi(EMPTY_SUPPLY); }, [supplyKey]);
+  useEffect(() => { setDecisionUi(EMPTY_DECISION); }, [decisionKey]);
 
-  const movementBatch = useMemo(() => view ? currentMovements(view) : [], [view]);
+  const movementBatch = useMemo(() => liveView ? currentMovements(liveView) : [], [liveView]);
   const movementKey = movementBatch.map((event) => event.event_id).join(":");
-  const movementCheckpointKind = view?.checkpoint?.kind;
-  const hasView = view !== null;
+  const movementCheckpointKind = liveView?.checkpoint?.kind;
+  const hasView = liveView !== null;
   const [movements, setMovements] = useState<MarketEvent[]>([]);
   const movementViewInitialized = useRef(false);
   useEffect(() => {
@@ -581,61 +754,210 @@ export function GamePage({ gameId, token }: { gameId: string; token: string }) {
     if (movementCheckpointKind === "round_result") return;
     const timer = window.setTimeout(() => setMovements([]), 2400);
     return () => window.clearTimeout(timer);
-  }, [hasView, movementCheckpointKind, movementKey]);
+  }, [hasView, movementBatch, movementCheckpointKind, movementKey]);
 
-  if (!view && !error) return <main className={styles.centerState}>OPENING GAME</main>;
-  if (!view) return <main className={styles.centerState}><span>GAME UNAVAILABLE</span><span>{error}</span><TextButton onClick={() => window.location.assign("/")}>NEW GAME</TextButton></main>;
+  if (!liveView && !error) return <main className={styles.centerState}>OPENING GAME</main>;
+  if (!liveView) return <main className={styles.centerState}><span>GAME UNAVAILABLE</span><span>{error}</span><TextButton onClick={() => window.location.assign("/")}>NEW GAME</TextButton></main>;
 
-  const selectedAssignment = selectedSupplyCard ? supplyDraft[selectedSupplyCard] : undefined;
+  const view = showBackView && backView ? backView : liveView;
+  const shownMovements = showBackView ? currentMovements(view) : movements;
+  const supplyDraft = supplyUi.draft;
+  const selectedSupplyAssignment = supplyUi.selectedCardRef ? supplyDraft[supplyUi.selectedCardRef] : undefined;
   const supplyTargets = new Set<number>();
-  if (view.supply_batch && selectedSupplyCard) {
-    for (const plan of view.supply_batch.plans.filter((candidate) => planMatchesDraft(candidate, supplyDraft, { cardRef: selectedSupplyCard, field: "stockpile_id" }))) {
-      const placement = plan.placements.find((candidate) => candidate.card_ref === selectedSupplyCard);
+  if (view.supply_batch && supplyUi.selectedCardRef && selectedSupplyAssignment?.visibility === undefined) {
+    for (const plan of view.supply_batch.plans.filter((candidate) => planMatchesDraft(candidate, supplyDraft, { cardRef: supplyUi.selectedCardRef!, field: "stockpile_id" }))) {
+      const placement = plan.placements.find((candidate) => candidate.card_ref === supplyUi.selectedCardRef);
       if (placement) supplyTargets.add(placement.stockpile_id);
     }
   }
+  const demandTargets = new Set<number>(view.decision_batch?.kind === "demand" ? view.decision_batch.plans.map((plan) => plan.stockpile_id) : []);
+  const actionTargets = new Map<number, number>();
+  for (const action of view.legal_actions.filter((candidate) => candidate.control === "stockpile")) {
+    const target = action.target_id?.match(/^stockpile:(\d+)$/);
+    if (target) actionTargets.set(Number(target[1]), action.action_id);
+  }
+  const selectablePiles = new Set([...supplyTargets, ...demandTargets, ...actionTargets.keys()]);
+  const tentativeByPile = tentativePlacements(view.supply_batch, supplyDraft);
+  const exactPlan = view.supply_batch ? exactSupplyPlan(view.supply_batch, supplyDraft) : undefined;
+  const supplyPartial = Boolean(supplyUi.selectedCardRef || Object.keys(supplyDraft).length);
+  const decisionPartial = decisionUi.actionId !== null || decisionUi.planId !== null || decisionUi.stockpileId !== null || decisionUi.direction !== null;
+  const interactionDisabled = submitting || resignArmed || showBackView;
 
+  function beginDecision() {
+    setBackView(null);
+    setShowBackView(false);
+  }
+  function updateSupply(updater: (current: SupplySnapshot) => SupplySnapshot) {
+    beginDecision();
+    setSupplyUi((current) => {
+      const before = supplySnapshot(current);
+      const next = updater(before);
+      return { ...next, history: [...current.history, before] };
+    });
+  }
+  function updateDecision(updater: (current: DecisionSnapshot) => DecisionSnapshot) {
+    beginDecision();
+    setDecisionUi((current) => {
+      const before = decisionSnapshot(current);
+      const next = updater(before);
+      return { ...next, history: [...current.history, before] };
+    });
+  }
+  function undoSupply() {
+    setSupplyUi((current) => {
+      const prior = current.history.at(-1) ?? { selectedCardRef: null, draft: {} };
+      return { ...prior, history: current.history.slice(0, -1) };
+    });
+  }
+  function undoDecision() {
+    setDecisionUi((current) => {
+      const prior = current.history.at(-1) ?? decisionSnapshot(EMPTY_DECISION);
+      return { ...prior, history: current.history.slice(0, -1) };
+    });
+  }
+  function removeSupplyCard(cardRef: string) {
+    updateSupply((current) => {
+      const draft = { ...current.draft };
+      delete draft[cardRef];
+      return { selectedCardRef: null, draft };
+    });
+  }
   function chooseSupplyPile(stockpileId: number) {
-    if (!selectedSupplyCard || !supplyTargets.has(stockpileId)) return;
-    setSupplyDraft((current) => ({ ...current, [selectedSupplyCard]: { ...current[selectedSupplyCard], stockpile_id: stockpileId } }));
+    if (!supplyUi.selectedCardRef || !supplyTargets.has(stockpileId)) return;
+    const cardRef = supplyUi.selectedCardRef;
+    updateSupply((current) => ({
+      selectedCardRef: cardRef,
+      draft: { ...current.draft, [cardRef]: { ...current.draft[cardRef], stockpile_id: stockpileId } },
+    }));
+  }
+  function chooseSupplyVisibility(visibility: SupplyPlacement["visibility"]) {
+    const cardRef = supplyUi.selectedCardRef;
+    if (!view.supply_batch || !cardRef) return;
+    const matchingPlan = view.supply_batch.plans.find((plan) =>
+      planMatchesDraft(plan, supplyDraft, { cardRef, field: "visibility" })
+      && plan.placements.some((placement) => placement.card_ref === cardRef && placement.visibility === visibility)
+    );
+    if (!matchingPlan) return;
+    updateSupply((current) => {
+      const draft = { ...current.draft };
+      draft[cardRef] = { ...draft[cardRef], visibility };
+      return { selectedCardRef: null, draft };
+    });
+  }
+  function selectPile(stockpileId: number) {
+    if (supplyTargets.has(stockpileId)) return chooseSupplyPile(stockpileId);
+    if (demandTargets.has(stockpileId)) {
+      updateDecision((current) => ({ ...current, stockpileId: current.stockpileId === stockpileId ? null : stockpileId, planId: null }));
+      return;
+    }
+    const actionId = actionTargets.get(stockpileId);
+    if (actionId !== undefined) updateDecision((current) => ({ ...current, actionId: current.actionId === actionId ? null : actionId }));
+  }
+  function selectAction(actionId: number) {
+    updateDecision((current) => ({ ...current, actionId: current.actionId === actionId ? null : actionId }));
+  }
+  function selectPlan(planId: string) {
+    updateDecision((current) => ({ ...current, planId: current.planId === planId ? null : planId }));
+  }
+  function selectDirection(direction: "up" | "down") {
+    updateDecision((current) => ({ ...current, direction: current.direction === direction ? null : direction, planId: null }));
+  }
+
+  let contextLabel: string | null = null;
+  if (resignArmed) contextLabel = "CONFIRM";
+  else if (showBackView) contextLabel = "CONTINUE";
+  else if (view.checkpoint) contextLabel = "CONTINUE";
+  else if (exactPlan || decisionUi.actionId !== null || decisionUi.planId !== null) contextLabel = "CONFIRM";
+  else if (supplyPartial || decisionPartial) contextLabel = "UNDO";
+  else if (backView && !view.terminal_results) contextLabel = "BACK";
+  else if (view.terminal_results) contextLabel = "CONTINUE";
+  const contextEnabled = contextLabel !== null;
+  const displayedContextLabel = contextLabel ?? (isHumanDecision(view) ? "BACK" : "CONTINUE");
+
+  async function handleContext() {
+    if (resignArmed) {
+      if (await resign()) {
+        clearSeatToken(gameId);
+        navigate("/");
+      }
+      return;
+    }
+    if (showBackView) return void setShowBackView(false);
+    if (view.checkpoint) {
+      const previous = view;
+      const next = await acknowledge(view.checkpoint.checkpoint_id);
+      if (next && isHumanDecision(next)) {
+        setBackView(previous);
+        setShowBackView(false);
+      } else if (next) {
+        setBackView(null);
+        setShowBackView(false);
+      }
+      return;
+    }
+    if (exactPlan) {
+      if (await supply(exactPlan.plan_id)) setSupplyUi(EMPTY_SUPPLY);
+      return;
+    }
+    if (decisionUi.planId !== null) {
+      if (await commitDecision(decisionUi.planId)) setDecisionUi(EMPTY_DECISION);
+      return;
+    }
+    if (decisionUi.actionId !== null) {
+      if (await act(decisionUi.actionId)) setDecisionUi(EMPTY_DECISION);
+      return;
+    }
+    if (supplyPartial) return void undoSupply();
+    if (decisionPartial) return void undoDecision();
+    if (backView) return void setShowBackView(true);
+    if (view.terminal_results) navigate("/");
   }
 
   return (
     <div className={styles.game}>
       {error && <div className={styles.errorBanner} role="alert">{error}</div>}
-      <div className={`${styles.workstation} ${view.terminal_results ? styles.workstationTerminal : ""}`} data-testid="workstation" data-decision-kind={view.pending_decision.kind} data-checkpoint-kind={view.checkpoint?.kind}>
+      <div className={styles.workstation} data-testid="workstation" data-decision-kind={view.pending_decision.kind} data-checkpoint-kind={view.checkpoint?.kind}>
         <Status view={view} />
-        <Market view={view} movements={movements} onAction={(id) => void act(id)} disabled={submitting} />
-        <MarketInformation view={view} visibility="private" />
-        <MarketInformation view={view} visibility="public" />
+        <Market view={view} movements={shownMovements} selectedActionId={decisionUi.actionId} selectedPlanId={decisionUi.planId} selectedDirection={decisionUi.direction} onSelectAction={selectAction} onSelectImpactCompany={selectPlan} disabled={interactionDisabled} />
+        <Research view={view} served={view.checkpoint?.kind === "round_result" || Boolean(view.terminal_results)} />
         {view.terminal_results ? <TerminalField view={view} /> : (
           <StockpileField
             view={view}
             expanded={expandedPiles}
+            selectedStockpileId={selectedSupplyAssignment?.stockpile_id ?? decisionUi.stockpileId}
+            selectablePiles={selectablePiles}
+            tentativeByPile={tentativeByPile}
+            onSelectPile={selectPile}
             onInspect={(id) => setExpandedPiles((current) => {
               const next = new Set(current);
               if (next.has(id)) next.delete(id); else next.add(id);
               return next;
             })}
-            onAction={(id) => void act(id)}
-            disabled={submitting}
-            supplyTargets={supplyTargets}
-            selectedSupplyPile={selectedAssignment?.stockpile_id ?? null}
-            onSupplyPile={chooseSupplyPile}
+            onUndoTentative={removeSupplyCard}
+            disabled={interactionDisabled}
           />
         )}
-        {!view.terminal_results && <Portfolio view={view} />}
-        {!view.terminal_results && <Players view={view} />}
+        <Portfolio view={view} served={Boolean(view.terminal_results)} />
+        <Players view={view} />
         <ActionDock
           view={view}
-          draft={supplyDraft}
-          selectedCardRef={selectedSupplyCard}
-          setSelectedCardRef={setSelectedSupplyCard}
-          setDraft={setSupplyDraft}
-          onAction={(id) => void act(id)}
-          onSupply={(planId) => void supply(planId)}
-          onAcknowledge={(checkpointId) => void acknowledge(checkpointId)}
+          supply={supplyUi}
+          decision={decisionUi}
+          contextLabel={displayedContextLabel}
+          contextEnabled={contextEnabled}
+          contextPlanId={exactPlan?.plan_id ?? decisionUi.planId ?? undefined}
+          contextActionId={decisionUi.actionId ?? undefined}
+          onContext={() => void handleContext()}
+          onResign={() => setResignArmed((current) => !current)}
+          resignArmed={resignArmed}
+          onSupplyCard={(cardRef) => updateSupply((current) => ({ selectedCardRef: current.selectedCardRef === cardRef ? null : cardRef, draft: current.draft }))}
+          onSupplyVisibility={chooseSupplyVisibility}
+          onUndoSupplyCard={removeSupplyCard}
+          onDirection={selectDirection}
+          onPlan={selectPlan}
+          onAction={selectAction}
           disabled={submitting}
+          contentDisabled={interactionDisabled}
         />
       </div>
     </div>

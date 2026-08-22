@@ -34,8 +34,7 @@ const patterns = [
 const regions = [
   "Status",
   "Market",
-  "Private information",
-  "Public information",
+  "Research",
   "Stockpiles",
   "Portfolio",
   "Players",
@@ -54,6 +53,12 @@ type Coverage = {
   demandPurchasers: Map<number, number[]>;
   maxPrice: number;
   renderedPriceAboveTen: boolean;
+  backChecked: boolean;
+  sawDemandWhiteOut: boolean;
+  sawResearchWhiteOut: boolean;
+  sawDeduplicatedSales: boolean;
+  sawLocalBidStep: boolean;
+  sawLocalImpactTarget: boolean;
   privacyFailures: string[];
   pendingAudits: Promise<void>[];
 };
@@ -78,6 +83,12 @@ function newCoverage(): Coverage {
     demandPurchasers: new Map(),
     maxPrice: Number.NEGATIVE_INFINITY,
     renderedPriceAboveTen: false,
+    backChecked: false,
+    sawDemandWhiteOut: false,
+    sawResearchWhiteOut: false,
+    sawDeduplicatedSales: false,
+    sawLocalBidStep: false,
+    sawLocalImpactTarget: false,
     privacyFailures: [],
     pendingAudits: [],
   };
@@ -163,7 +174,7 @@ function recordView(view: GameView, coverage: Coverage, token: string) {
     if (!previous || previous.kind !== current.kind || previous.round !== current.round) {
       coverage.checkpoints.push(current);
     }
-    if (view.legal_actions.length || view.supply_batch !== null || view.pending_decision.kind !== "acknowledge") {
+    if (view.legal_actions.length || view.supply_batch !== null || view.decision_batch !== null || view.pending_decision.kind !== "acknowledge") {
       fail(coverage, `${view.checkpoint.kind} exposed a next-phase decision before acknowledgement`);
     }
     if (view.checkpoint.kind === "demand_result") {
@@ -195,7 +206,7 @@ function isGameViewResponse(response: Response, gameId: string) {
   if (!response.ok()) return false;
   const url = new URL(response.url());
   if (!url.pathname.startsWith(`/api/v2/games/${gameId}/`)) return false;
-  return ["view", "actions", "supply", "acknowledgements"].includes(url.pathname.split("/").at(-1) ?? "");
+  return ["view", "actions", "supply", "decisions", "acknowledgements"].includes(url.pathname.split("/").at(-1) ?? "");
 }
 
 async function awaitAudits(harness: GameHarness) {
@@ -298,7 +309,7 @@ async function acceptResponse(harness: GameHarness, response: Response) {
   return view;
 }
 
-function postResponse(page: Page, gameId: string, endpoint: "actions" | "supply" | "acknowledgements") {
+function postResponse(page: Page, gameId: string, endpoint: "actions" | "supply" | "decisions" | "acknowledgements" | "resignations") {
   return page.waitForResponse((response) => (
     response.request().method() === "POST"
     && new URL(response.url()).pathname === `/api/v2/games/${gameId}/${endpoint}`
@@ -306,11 +317,17 @@ function postResponse(page: Page, gameId: string, endpoint: "actions" | "supply"
 }
 
 async function submitAction(harness: GameHarness, action: LegalAction) {
-  const button = harness.page.locator(`[data-action-id="${action.action_id}"]`).first();
-  await expect(button).toBeVisible();
-  await expect(button).toBeEnabled();
+  const target = action.control === "stockpile"
+    ? harness.page.locator(`[data-stockpile-id="${action.target_id?.split(":").at(-1)}"] [data-stockpile-target]`)
+    : harness.page.locator(`[data-action-id="${action.action_id}"]`).first();
+  await expect(target).toBeVisible();
+  await expect(target).toBeEnabled();
+  await target.click({ position: { x: 5, y: 5 } });
+  const confirm = harness.page.locator('[data-context-action="confirm"]');
+  await expect(confirm).toBeVisible();
+  await expect(confirm).toHaveAttribute("data-action-id", String(action.action_id));
   const responsePromise = postResponse(harness.page, harness.gameId, "actions");
-  await button.click({ position: { x: 5, y: 5 } });
+  await confirm.click();
   const response = await responsePromise;
   expect(response.request().postDataJSON()).toEqual({
     action_id: action.action_id,
@@ -329,19 +346,20 @@ async function submitSupply(harness: GameHarness, plan: SupplyPlan) {
     await expect(card).toBeVisible();
     await card.click({ position: { x: 5, y: 5 } });
 
+    const pile = harness.page.locator(`[data-stockpile-id="${placement!.stockpile_id}"] [data-stockpile-target]`);
+    await expect(pile).toBeVisible();
+    await pile.click({ position: { x: 5, y: 5 } });
+
     const visibility = harness.page.locator(`[data-supply-visibility="${placement!.visibility}"]`);
     await expect(visibility).toBeVisible();
     await visibility.click();
-    await expect(visibility).toHaveAttribute("aria-pressed", "true");
-
-    const pile = harness.page.locator(`[data-supply-pile-target="${placement!.stockpile_id}"]`);
-    await expect(pile).toBeVisible();
-    await pile.click({ position: { x: 5, y: 5 } });
     await expect(card).toHaveAttribute("data-assigned-pile", String(placement!.stockpile_id));
     await expect(card).toHaveAttribute("data-assigned-visibility", placement!.visibility);
+    await expect(card).toHaveAttribute("data-white-out", "true");
+    await expect(harness.page.locator(`[data-tentative-card-ref="${card_ref}"]`)).toHaveAttribute("data-white-out", "true");
   }
 
-  const confirm = harness.page.locator("[data-supply-confirm]");
+  const confirm = harness.page.locator('[data-context-action="confirm"]');
   await expect(confirm).toBeEnabled();
   await expect(confirm).toHaveAttribute("data-plan-id", plan.plan_id);
   const responsePromise = postResponse(harness.page, harness.gameId, "supply");
@@ -354,10 +372,52 @@ async function submitSupply(harness: GameHarness, plan: SupplyPlan) {
   return acceptResponse(harness, response);
 }
 
+async function submitDecision(harness: GameHarness) {
+  const batch = harness.view.decision_batch;
+  expect(batch).not.toBeNull();
+  let planId: string;
+  if (batch!.kind === "demand") {
+    const plan = batch.plans[0];
+    planId = plan.plan_id;
+    const pile = harness.page.locator(`[data-stockpile-id="${plan.stockpile_id}"] [data-stockpile-target]`);
+    await expect(pile).toBeVisible();
+    await pile.click({ position: { x: 5, y: 5 } });
+    const bid = harness.page.locator(`[data-decision-plan-id="${plan.plan_id}"]`);
+    await expect(bid).toBeVisible();
+    harness.coverage.sawLocalBidStep = true;
+    await bid.click();
+  } else {
+    const plan = batch!.plans[0];
+    planId = plan.plan_id;
+    await harness.page.locator(`[data-impact-direction="${plan.direction}"]`).click();
+    const company = harness.page.locator(`[data-decision-plan-id="${plan.plan_id}"]`);
+    await expect(company).toBeVisible();
+    harness.coverage.sawLocalImpactTarget = true;
+    await company.click();
+  }
+  const confirm = harness.page.locator('[data-context-action="confirm"]');
+  await expect(confirm).toHaveAttribute("data-plan-id", planId);
+  const responsePromise = postResponse(harness.page, harness.gameId, "decisions");
+  await confirm.click();
+  const response = await responsePromise;
+  expect(response.request().postDataJSON()).toEqual({
+    plan_id: planId,
+    expected_revision: harness.view.revision,
+  });
+  return acceptResponse(harness, response);
+}
+
 async function acknowledge(harness: GameHarness) {
   const checkpoint = harness.view.checkpoint;
   expect(checkpoint).not.toBeNull();
-  const button = harness.page.locator("[data-checkpoint-continue]");
+  if (checkpoint!.kind === "demand_result") {
+    await expect(harness.page.locator('article[data-white-out="true"]')).toHaveCount(4);
+    harness.coverage.sawDemandWhiteOut = true;
+  } else {
+    await expect(harness.page.getByLabel("Research")).toHaveAttribute("data-white-out", "true");
+    harness.coverage.sawResearchWhiteOut = true;
+  }
+  const button = harness.page.locator('[data-context-action="continue"]');
   await expect(button).toBeVisible();
   await expect(button).toHaveAttribute("data-checkpoint-kind", checkpoint!.kind);
   const responsePromise = postResponse(harness.page, harness.gameId, "acknowledgements");
@@ -367,7 +427,18 @@ async function acknowledge(harness: GameHarness) {
     checkpoint_id: checkpoint!.checkpoint_id,
     expected_revision: harness.view.revision,
   });
-  return acceptResponse(harness, response);
+  const next = await acceptResponse(harness, response);
+  const back = harness.page.locator('[data-context-action="back"]');
+  if (!harness.coverage.backChecked && await back.count()) {
+    await back.click();
+    await expect(harness.page.getByTestId("workstation")).toHaveAttribute("data-checkpoint-kind", checkpoint!.kind);
+    const returnToDecision = harness.page.locator('[data-context-action="continue"]');
+    await expect(returnToDecision).toBeVisible();
+    await returnToDecision.click();
+    await expect(harness.page.getByTestId("workstation")).toHaveAttribute("data-decision-kind", next.pending_decision.kind);
+    harness.coverage.backChecked = true;
+  }
+  return next;
 }
 
 async function driveGame(harness: GameHarness, maximumSteps = 2_000) {
@@ -380,6 +451,19 @@ async function driveGame(harness: GameHarness, maximumSteps = 2_000) {
     if (harness.view.supply_batch) {
       await submitSupply(harness, harness.view.supply_batch.plans[0]);
       continue;
+    }
+    if (harness.view.decision_batch) {
+      await submitDecision(harness);
+      continue;
+    }
+    const sales = harness.view.legal_actions.filter((action) => action.control === "sell" && action.sale_preview);
+    if (sales.length) {
+      const identities = sales.map((action) => {
+        const sale = action.sale_preview!;
+        return `${sale.shares_thousands}:${sale.gross_value_thousands}:${sale.resulting_shares_thousands}`;
+      });
+      expect(new Set(identities).size).toBe(identities.length);
+      harness.coverage.sawDeduplicatedSales = true;
     }
     const action = harness.view.legal_actions[0];
     expect(
@@ -415,7 +499,7 @@ async function expectDisciplinedVisualLanguage(page: Page) {
       if (style.fontStyle !== "normal") problems.push(`font-style:${style.fontStyle}`);
       return problems.map((problem) => `${element.tagName.toLowerCase()}:${problem}`);
     });
-    const sectionNames = new Set(["MARKET", "PRIVATE", "PUBLIC", "PORTFOLIO", "PLAYERS", "ACTION"]);
+    const sectionNames = new Set(["MARKET", "RESEARCH", "PORTFOLIO", "PLAYERS", "ACTION"]);
     const sectionStyles = visible
       .filter((element) => element.children.length === 0 && sectionNames.has(element.textContent?.trim() ?? ""))
       .map((element) => {
@@ -453,7 +537,7 @@ async function expectDisciplinedVisualLanguage(page: Page) {
   expect(audit.fontFamilies).toHaveLength(1);
   expect(audit.fontSizes.length).toBeLessThanOrEqual(2);
   expect(audit.visualViolations).toEqual([]);
-  expect(audit.sectionLabelCount).toBeGreaterThanOrEqual(6);
+  expect(audit.sectionLabelCount).toBeGreaterThanOrEqual(5);
   expect(audit.sectionStyleCount).toBe(1);
 }
 
@@ -464,19 +548,12 @@ function expectedCheckpointSequence() {
   ]);
 }
 
-test("Home is only the fixed YOU-vs-COMPUTER Lite configuration", async ({ page }) => {
+test("Home exposes only Trainer LITE and LITE+ through one button language", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("STOCKPILE", { exact: true })).toBeVisible();
-  await expect(page.getByText("LITE", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button")).toHaveCount(5);
-
-  const featureNames = ["DIVIDEND", "FEES", "IMPACT", "SELL ORDER"];
-  for (const feature of featureNames) {
-    const button = page.getByRole("button", { name: feature, exact: true });
-    await expect(button).toBeVisible();
-    await expect(button).toHaveAttribute("aria-pressed", "false");
-  }
-  await expect(page.getByRole("button", { name: "START", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Stockpile Trainer")).toHaveText("STOCKPILE TRAINER");
+  await expect(page.getByRole("button", { name: "LITE", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "LITE+", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "PLAY", exact: true })).toHaveCount(0);
   await expect(page.locator("input, select, textarea")).toHaveCount(0);
 
   const homeText = (await page.locator("body").innerText()).toUpperCase();
@@ -486,6 +563,7 @@ test("Home is only the fixed YOU-vs-COMPUTER Lite configuration", async ({ page 
     "OPEN SEAT",
     "CHAT",
     "LOBBY",
+    "IMPACT",
     "HAND",
     "SPLIT",
     "MAJORITY",
@@ -497,10 +575,22 @@ test("Home is only the fixed YOU-vs-COMPUTER Lite configuration", async ({ page 
     expect(homeText).not.toContain(forbidden);
   }
 
-  const buttonGeometry = await page.getByRole("button").evaluateAll((buttons) => buttons.map((button) => {
+  await page.getByRole("button", { name: "LITE+", exact: true }).click();
+  const featureNames = ["DIVIDEND", "FEES", "SELL ORDER"];
+  for (const feature of featureNames) {
+    const button = page.getByRole("button", { name: feature, exact: true });
+    await expect(button).toBeVisible();
+    await expect(button).toHaveAttribute("aria-pressed", "false");
+  }
+  await expect(page.getByRole("button", { name: "PLAY", exact: true })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "DIVIDEND", exact: true }).click();
+  const controls = page.getByRole("button");
+  const buttonGeometry = await controls.evaluateAll((buttons) => buttons.map((button) => {
     const box = button.getBoundingClientRect();
     const style = getComputedStyle(button);
     return {
+      width: box.width,
       height: box.height,
       background: style.backgroundColor,
       border: style.border,
@@ -509,24 +599,25 @@ test("Home is only the fixed YOU-vs-COMPUTER Lite configuration", async ({ page 
       shadow: style.boxShadow,
     };
   }));
+  expect(new Set(buttonGeometry.map((item) => item.width)).size).toBe(1);
   expect(new Set(buttonGeometry.map((item) => item.height)).size).toBe(1);
-  expect(buttonGeometry.every((item) => item.background === "rgb(255, 255, 255)")).toBe(true);
+  expect(buttonGeometry.every((item) => item.width === 144 && item.height === 36)).toBe(true);
   expect(buttonGeometry.every((item) => item.border.includes("rgb(17, 17, 17)") && item.radius === "0px" && item.weight === "400" && item.shadow === "none")).toBe(true);
 
-  for (const feature of featureNames) await page.getByRole("button", { name: feature, exact: true }).click();
-  for (const feature of featureNames) {
-    const button = page.getByRole("button", { name: feature, exact: true });
-    await expect(button).toHaveAttribute("aria-pressed", "true");
-    await expect(button).toHaveCSS("background-color", "rgb(17, 17, 17)");
-  }
-  await expect(page.getByRole("button", { name: "START", exact: true })).toHaveCSS("background-color", "rgb(255, 255, 255)");
+  await expect(page.getByRole("button", { name: "DIVIDEND", exact: true })).toHaveCSS("background-color", "rgb(17, 17, 17)");
+  await expect(page.getByRole("button", { name: "PLAY", exact: true })).toHaveCSS("background-color", "rgb(255, 255, 255)");
 
   const createRequest = page.waitForRequest((request) => request.method() === "POST" && new URL(request.url()).pathname === "/api/v2/games");
-  await page.getByRole("button", { name: "START", exact: true }).click();
-  expect((await createRequest).postDataJSON()).toEqual({ options: allOptions });
+  await page.getByRole("button", { name: "PLAY", exact: true }).click();
+  expect((await createRequest).postDataJSON()).toEqual({ options: {
+    market_impact: false,
+    trading_fees: false,
+    dividends: true,
+    sell_order: false,
+  } });
 });
 
-test("one fragment token opens a fixed private view with disciplined layout and inspectable ordered stacks", async ({ page, request }) => {
+test("one token opens fixed Research, exact cards, and independently inspectable stacks", async ({ page, request }) => {
   await page.setViewportSize({ width: 1_280, height: 900 });
   const harness = await openGame(page, request, defaultOptions, 101);
   try {
@@ -535,6 +626,9 @@ test("one fragment token opens a fixed private view with disciplined layout and 
     await expect(page.getByText("SEAT", { exact: true })).toHaveCount(0);
     await expect(page.getByText("COMPUTER", { exact: true })).toBeVisible();
     await expect(page.getByText("YOU", { exact: true })).toBeVisible();
+    await expect(page.getByText("RESEARCH", { exact: true })).toBeVisible();
+    await expect(page.getByText("PRIVATE", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("PUBLIC", { exact: true })).toHaveCount(0);
 
     const piles = page.locator("article[data-stockpile-id]");
     await expect(piles).toHaveCount(4);
@@ -563,6 +657,20 @@ test("one fragment token opens a fixed private view with disciplined layout and 
 
     const batch = harness.view.supply_batch!;
     const samePilePlan = batch.plans.find((plan) => new Set(plan.placements.map((placement) => placement.stockpile_id)).size === 1) ?? batch.plans[0];
+    const staged = samePilePlan.placements[0];
+    const stagedSource = page.locator(`[data-supply-card-ref="${staged.card_ref}"]`);
+    await stagedSource.click();
+    await page.locator(`[data-stockpile-id="${staged.stockpile_id}"] [data-stockpile-target]`).click({ position: { x: 5, y: 5 } });
+    const stagedVisibility = page.locator(`[data-supply-visibility="${staged.visibility}"]`);
+    await expect(stagedVisibility).toBeVisible();
+    await stagedVisibility.click();
+    const tentative = page.locator(`[data-tentative-card-ref="${staged.card_ref}"]`);
+    await expect(tentative).toHaveAttribute("data-white-out", "true");
+    await expect(stagedSource).toHaveAttribute("data-white-out", "true");
+    await tentative.dblclick();
+    await expect(tentative).toHaveCount(0);
+    await expect(stagedSource).not.toHaveAttribute("data-assigned-pile");
+
     await submitSupply(harness, samePilePlan);
 
     const rememberedPile = harness.view.stockpiles.find((pile) => (
@@ -586,7 +694,7 @@ test("one fragment token opens a fixed private view with disciplined layout and 
     };
     page.on("request", countMutation);
     const revisionBeforeInspection = harness.view.revision;
-    await inspector.click();
+    await inspector.dblclick();
     await expect(inspector).toHaveAttribute("aria-expanded", "true");
     await expect(pile.getByText("FACE DOWN", { exact: true })).toBeVisible();
     if (await selectedSupplyCard.count()) await expect(selectedSupplyCard).not.toHaveAttribute("data-assigned-pile", /.+/);
@@ -625,7 +733,54 @@ test("one fragment token opens a fixed private view with disciplined layout and 
 
     const expectedCardCount = harness.view.stockpiles.reduce((count, candidate) => count + candidate.cards_bottom_to_top.length, 0);
     await expect(page.locator('[data-card-scale="stockpile"]')).toHaveCount(expectedCardCount);
+    const largeCardSizes = await page.locator('[data-card-scale="stockpile"]').evaluateAll((cards) => cards.map((card) => {
+      const box = card.getBoundingClientRect();
+      return [Math.round(box.width), Math.round(box.height)];
+    }));
+    expect(new Set(largeCardSizes.map((size) => size.join("x")))).toEqual(new Set(["104x139"]));
+    const smallCards = page.locator('[data-card-scale="active"], [data-card-scale="portfolio"], [data-card-scale="information"]');
+    expect(await smallCards.count()).toBeGreaterThan(0);
+    const smallCardSizes = await smallCards.evaluateAll((cards) => cards.map((card) => {
+      const box = card.getBoundingClientRect();
+      return [Math.round(box.width), Math.round(box.height)];
+    }));
+    expect(new Set(smallCardSizes.map((size) => size.join("x")))).toEqual(new Set(["54x72"]));
+    await expect(page.getByLabel("Hidden card").first()).toHaveCSS("background-color", "rgb(0, 47, 167)");
     await expect(page.getByText("1K", { exact: true }).first()).toBeVisible();
+  } finally {
+    await awaitAudits(harness);
+  }
+});
+
+test("RESIGN is persistent, cancellable, and returns home only after confirmation", async ({ page, request }) => {
+  const harness = await openGame(page, request, defaultOptions, 211);
+  try {
+    let resignationRequests = 0;
+    page.on("request", (sent) => {
+      if (new URL(sent.url()).pathname.endsWith("/resignations")) resignationRequests += 1;
+    });
+    const resign = page.locator("[data-resign]");
+    await expect(resign).toBeVisible();
+    await resign.click();
+    const confirm = page.locator('[data-context-action="confirm"][data-resign-confirm="true"]');
+    await expect(confirm).toBeVisible();
+    expect(resignationRequests).toBe(0);
+    await resign.click();
+    await expect(confirm).toHaveCount(0);
+    expect(resignationRequests).toBe(0);
+
+    await resign.click();
+    const responsePromise = postResponse(page, harness.gameId, "resignations");
+    await page.locator('[data-context-action="confirm"][data-resign-confirm="true"]').click();
+    const response = await responsePromise;
+    expect(response.status()).toBe(204);
+    expect(response.request().postDataJSON()).toEqual({ expected_revision: harness.view.revision });
+    await page.waitForURL("http://127.0.0.1:5173/");
+    expect(await page.evaluate(
+      (gameId) => sessionStorage.getItem(`stockpile.seatToken:${gameId}`),
+      harness.gameId,
+    )).toBeNull();
+    expect(resignationRequests).toBe(1);
   } finally {
     await awaitAudits(harness);
   }
@@ -642,7 +797,8 @@ test("default seed 101 completes six rounds through Demand and Round acknowledge
     expect(terminal.terminal_results?.winner_ids.length).toBeGreaterThan(0);
     expect(harness.coverage.checkpoints).toEqual(expectedCheckpointSequence());
     expect([...harness.coverage.phases]).toEqual(expect.arrayContaining(["supply", "demand", "selling", "terminal"]));
-    expect([...harness.coverage.decisions]).toEqual(expect.arrayContaining(["supply", "bid_pile", "bid_amount", "sell", "acknowledge", "terminal"]));
+    expect([...harness.coverage.decisions]).toEqual(expect.arrayContaining(["supply", "bid_pile", "sell", "acknowledge", "terminal"]));
+    expect(harness.coverage.sawLocalBidStep).toBe(true);
     expect([...harness.coverage.eventTypes].some((event) => event.includes("market"))).toBe(true);
 
     expect(harness.coverage.demandPurchasers.size).toBe(6);
@@ -654,6 +810,27 @@ test("default seed 101 completes six rounds through Demand and Round acknowledge
     expect(harness.coverage.views.every((view) => view.viewer.player_id === 0 && view.viewer.name === "YOU")).toBe(true);
     expect(harness.coverage.views.every((view) => view.stockpiles.length === 4)).toBe(true);
     expect(harness.coverage.views.every((view) => view.players.every((player) => player.bid_markers.length === 2))).toBe(true);
+    expect(harness.coverage.backChecked).toBe(true);
+    expect(harness.coverage.sawDemandWhiteOut).toBe(true);
+    expect(harness.coverage.sawResearchWhiteOut).toBe(true);
+    expect(harness.coverage.sawDeduplicatedSales).toBe(true);
+
+    await expect(page.getByText("WINNER", { exact: true })).toHaveCount(0);
+    const chart = page.getByTestId("terminal-chart");
+    await expect(chart).toBeVisible();
+    await expect(chart.locator('[data-chart-segment="position"]')).toHaveCount(2);
+    await expect(chart.locator('[data-chart-segment="cash"]')).toHaveCount(2);
+    await expect(chart.locator('[data-chart-segment="position"]').first()).toHaveCSS("background-color", "rgb(0, 47, 167)");
+    await expect(chart.locator('[data-chart-segment="cash"]').first()).toHaveCSS("background-color", "rgb(255, 255, 255)");
+    const expectedMinimum = Math.min(0, ...terminal.terminal_results!.players.map((player) => player.cash_before_liquidation_thousands));
+    const expectedMaximum = Math.max(0, ...terminal.terminal_results!.players.flatMap((player) => [
+      player.liquidation_value_thousands,
+      player.final_cash_thousands,
+      player.liquidation_value_thousands + Math.max(0, player.cash_before_liquidation_thousands),
+    ]));
+    await expect(chart).toHaveAttribute("data-chart-min", String(expectedMinimum));
+    await expect(chart).toHaveAttribute("data-chart-max", String(expectedMaximum));
+    expect(await page.getByLabel("Portfolio").locator('[data-white-out="true"]').count()).toBeGreaterThan(0);
 
     for (const result of terminal.terminal_results!.players) {
       expect(result.final_cash_thousands).toBe(
@@ -678,7 +855,7 @@ test("all-options seed 2 renders Impact, ordinary prices above ten, and reaches 
     expect(terminal.terminal_results?.players).toHaveLength(2);
     expect(harness.coverage.checkpoints).toEqual(expectedCheckpointSequence());
     expect(harness.coverage.phases).toContain("action");
-    expect(harness.coverage.decisions).toContain("action_company");
+    expect(harness.coverage.sawLocalImpactTarget).toBe(true);
     expect(harness.coverage.causes).toContain("market_impact");
     expect(harness.coverage.maxPrice).toBeGreaterThan(10);
     expect(harness.coverage.renderedPriceAboveTen).toBe(true);

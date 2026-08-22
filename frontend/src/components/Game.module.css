@@ -8,17 +8,20 @@
 
 .game *,
 .game *::before,
-.game *::after { box-sizing: border-box; font-weight: 400; }
+.game *::after {
+  box-sizing: border-box;
+  font-weight: 400;
+}
 
 .workstation {
   display: grid;
-  grid-template-columns: minmax(180px, 20fr) minmax(500px, 58fr) minmax(190px, 22fr);
+  grid-template-columns: minmax(176px, 20fr) minmax(500px, 58fr) minmax(190px, 22fr);
   grid-template-rows: 42px minmax(0, .9fr) minmax(0, 1fr) minmax(0, 1fr) clamp(118px, 18vh, 160px);
   grid-template-areas:
     "status status status"
     "market stockpiles portfolio"
-    "private stockpiles portfolio"
-    "public stockpiles players"
+    "research stockpiles portfolio"
+    "research stockpiles players"
     "dock dock dock";
   gap: 1px;
   width: 100%;
@@ -26,7 +29,11 @@
   background: var(--black);
 }
 
-.module { min-width: 0; min-height: 0; background: var(--white); }
+.module {
+  min-width: 0;
+  min-height: 0;
+  background: var(--white);
+}
 
 .status {
   grid-area: status;
@@ -47,7 +54,11 @@
   padding: 18px;
   overflow: hidden;
 }
-.marketList { display: grid; align-content: start; gap: 8px; }
+.marketList {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
 .marketCompany {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr) auto auto;
@@ -56,19 +67,37 @@
   min-width: 0;
 }
 .marketCompany .stockPattern { width: 20px; height: 14px; }
-.marketName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.marketPrice { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.marketName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.marketPrice {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 
-.privateInformation { grid-area: private; }
-.publicInformation { grid-area: public; }
-.privateInformation,
-.publicInformation,
-.portfolio,
-.players { padding: 18px; overflow: auto; }
-.informationList { display: grid; gap: 14px; margin-top: 16px; }
-.informationPair { display: flex; align-items: center; gap: 7px; }
+.research {
+  grid-area: research;
+  padding: 18px;
+  overflow: auto;
+}
+.informationList {
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
+}
+.informationPair {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
 
-.stockpileField { grid-area: stockpiles; overflow: auto; padding: 20px; }
+.stockpileField {
+  grid-area: stockpiles;
+  overflow: auto;
+  padding: 20px;
+}
 .stockpileGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -85,7 +114,9 @@
   place-content: center;
   justify-items: center;
   gap: 10px;
+  transition: transform 120ms linear;
 }
+.stockpileSelected { transform: translateY(-4px); }
 .pileTarget {
   appearance: none;
   position: absolute;
@@ -97,83 +128,66 @@
   background: transparent;
   cursor: pointer;
 }
-.pileTarget::after {
-  content: "";
-  position: absolute;
-  right: 30%;
-  bottom: 2px;
-  left: 30%;
-  height: 1px;
-  background: transparent;
+.pileTarget:focus-visible {
+  outline: 1px solid var(--black);
+  outline-offset: -3px;
 }
-.pileTarget:hover::after,
-.pileTarget[aria-pressed="true"]::after { background: var(--black); }
-.pileTarget:focus-visible { outline: 1px solid var(--black); outline-offset: 2px; }
 .pileTarget:disabled { cursor: default; }
 .stackInspect {
-  appearance: none;
   position: relative;
   z-index: 2;
   display: grid;
   place-items: center;
-  padding: 0;
-  border: 0;
   color: var(--black);
   background: transparent;
   cursor: pointer;
 }
-.stackInspect:focus-visible { outline: 1px solid var(--black); outline-offset: 3px; }
-.bid { position: relative; z-index: 2; font-variant-numeric: tabular-nums; letter-spacing: .06em; pointer-events: none; }
+.stackInspect:focus-visible {
+  outline: 1px solid var(--black);
+  outline-offset: 3px;
+}
+.bid {
+  position: relative;
+  z-index: 2;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .06em;
+  pointer-events: none;
+}
 
 .stack {
   --stack-count: 1;
   position: relative;
   display: block;
-  width: calc(clamp(104px, 10vw, 150px) + (var(--stack-count) - 1) * 18px);
-  height: calc(clamp(139px, 13.333vw, 200px) + (var(--stack-count) - 1) * 4px);
+  width: calc(104px + (var(--stack-count) - 1) * 10px);
+  height: calc(139px + (var(--stack-count) - 1) * 3px);
 }
 .stackLayer {
   --stack-index: 0;
   position: absolute;
-  top: calc(var(--stack-index) * 4px);
-  left: calc(var(--stack-index) * 18px);
-}
-.stackEdge {
-  position: absolute;
-  z-index: 1;
-  top: 5px;
-  left: 3px;
-  display: grid;
-  width: 12px;
-  height: 14px;
-  place-items: center;
-  overflow: hidden;
-  background: var(--white);
-  pointer-events: none;
-}
-.stackEdge .stockPattern { width: 12px; height: 12px; }
-.hiddenStackEdge {
-  position: absolute;
-  z-index: 2;
-  top: 0;
-  bottom: 0;
-  left: 16px;
-  width: 1px;
-  background: var(--white);
-  pointer-events: none;
+  top: calc(var(--stack-index) * 3px);
+  left: calc(var(--stack-index) * 10px);
 }
 .stackExpanded {
   display: grid;
   grid-template-columns: repeat(2, 104px);
   width: auto;
   height: auto;
-  gap: 6px;
+  gap: 8px;
 }
-.stackExpanded .stackLayer { position: relative; top: auto; left: auto; }
-.stackExpanded [data-card-scale="stockpile"] { width: 104px; }
+.stackExpanded .stackLayer {
+  position: relative;
+  top: auto;
+  left: auto;
+}
+.blankCard { background: var(--white); }
 
 .stockCard { color: var(--blue); }
-.stockPattern { width: 82%; height: 72%; color: var(--blue); fill: currentColor; }
+.stockPattern {
+  width: 82%;
+  height: 72%;
+  color: var(--blue);
+  fill: currentColor;
+}
 .cardValue {
   position: absolute;
   right: 6px;
@@ -183,12 +197,22 @@
   font-variant-numeric: tabular-nums;
 }
 [data-card-scale="portfolio"] .cardValue,
-[data-card-scale="information"] .cardValue { right: 3px; bottom: 2px; font-size: var(--secondary-size); }
-.cardSignal { font-size: var(--primary-size); font-variant-numeric: tabular-nums; }
+[data-card-scale="information"] .cardValue {
+  right: 3px;
+  bottom: 2px;
+  font-size: var(--secondary-size);
+}
+.cardSignal {
+  font-size: var(--primary-size);
+  font-variant-numeric: tabular-nums;
+}
 .positive { color: var(--green); }
 .negative { color: var(--red); }
 .neutral { color: var(--black); }
-.hiddenCard { border-color: var(--black); background: var(--black); }
+.hiddenCard {
+  border-color: var(--blue);
+  background: var(--blue);
+}
 .faceDownFlag {
   position: absolute;
   top: 3px;
@@ -200,92 +224,250 @@
   letter-spacing: .04em;
 }
 
+.portfolio,
+.players {
+  padding: 18px;
+  overflow: auto;
+}
 .portfolio { grid-area: portfolio; }
-.portfolioCards { display: grid; grid-template-columns: repeat(auto-fit, 54px); gap: 10px; margin-top: 16px; }
-
+.portfolioCards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, 54px);
+  gap: 10px;
+  margin-top: 16px;
+}
 .players { grid-area: players; }
-.playerList { display: grid; gap: 22px; margin-top: 18px; }
-.player { display: grid; gap: 8px; }
-.metric { display: grid; grid-template-columns: minmax(54px, auto) auto auto; justify-content: start; gap: 10px; font-variant-numeric: tabular-nums; }
+.playerList {
+  display: grid;
+  gap: 22px;
+  margin-top: 18px;
+}
+.player {
+  display: grid;
+  gap: 8px;
+}
+.metric {
+  display: grid;
+  grid-template-columns: minmax(54px, auto) auto auto;
+  justify-content: start;
+  gap: 10px;
+  font-variant-numeric: tabular-nums;
+}
 
 .actionDock {
   grid-area: dock;
   display: grid;
-  grid-template-columns: minmax(140px, 18%) 1fr;
+  grid-template-columns: 120px minmax(0, 1fr) auto;
   align-items: center;
   gap: 20px;
   padding: 14px 22px;
   overflow: hidden;
 }
-.dockHeading { display: grid; gap: 10px; }
-.dockContents { display: flex; min-width: 0; align-items: center; gap: 12px; overflow-x: auto; padding: 3px; }
-.selectable { appearance: none; color: inherit; font: inherit; cursor: pointer; }
-.selectable:disabled { cursor: default; }
-.selectable:focus-visible { outline: 1px solid var(--black); outline-offset: 2px; }
-.selected { outline: 2px solid var(--black); outline-offset: 2px; }
-.objectControl { width: 100%; padding: 0; border: 0; background: var(--white); text-align: initial; }
-.cardAction { display: grid; flex: none; justify-items: center; gap: 6px; padding: 0; border: 0; background: var(--white); }
-.assignment { color: var(--black); font-size: var(--secondary-size); }
-
-.workstationTerminal {
-  grid-template-areas:
-    "status status status"
-    "market terminal terminal"
-    "private terminal terminal"
-    "public terminal terminal"
-    "dock dock dock";
+.dockHeading {
+  display: grid;
+  gap: 10px;
 }
-.terminal { grid-area: terminal; display: block; }
-.rankings { display: grid; gap: 20px; margin-top: 20px; }
-.ranking { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto auto; gap: 14px; }
-.liquidation { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 14px; }
-.liquidation > span { display: inline-flex; align-items: center; gap: 5px; }
-.liquidation .stockPattern { width: 20px; height: 14px; }
+.dockContents {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+  overflow-x: auto;
+  padding: 6px 3px;
+}
+.dockControls {
+  display: grid;
+  grid-template-columns: 144px 144px;
+  gap: 10px;
+}
+.controlSlot {
+  display: block;
+  width: 144px;
+  height: 36px;
+}
+.selectable {
+  appearance: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: transform 120ms linear;
+}
+.selectable:disabled { cursor: default; }
+.selectable:focus-visible {
+  outline: 1px solid var(--black);
+  outline-offset: 2px;
+}
+.selected { transform: translateY(-4px); }
+.objectControl {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: var(--white);
+  text-align: initial;
+}
+.cardAction {
+  display: grid;
+  flex: none;
+  justify-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: var(--white);
+}
 
-.errorBanner { position: fixed; z-index: 10; top: 8px; left: 50%; transform: translateX(-50%); padding: 10px 16px; color: var(--white); background: var(--black); }
-.centerState { display: grid; min-height: 100vh; place-content: center; justify-items: center; gap: 14px; color: var(--black); background: var(--white); font-size: var(--secondary-size); }
+.whiteOutObject,
+.whiteOutRegion { position: relative; }
+.whiteOutObject::after,
+.whiteOutRegion::after {
+  content: "";
+  position: absolute;
+  z-index: 8;
+  inset: 0;
+  background: rgba(255, 255, 255, .68);
+  pointer-events: none;
+}
+
+.terminal {
+  display: grid;
+  align-content: start;
+  gap: 18px;
+}
+.rankings {
+  display: grid;
+  gap: 18px;
+}
+.ranking {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: 12px;
+}
+.liquidation {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+}
+.liquidation > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.liquidation .stockPattern {
+  width: 20px;
+  height: 14px;
+}
+.terminalChart {
+  display: grid;
+  width: 75%;
+  gap: 12px;
+  margin: 4px auto 0;
+}
+.chartRow {
+  display: grid;
+  grid-template-columns: minmax(0, 74px) minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+.chartTrack {
+  position: relative;
+  display: block;
+  height: 22px;
+}
+.positionSegment,
+.cashSegment,
+.zeroLine {
+  position: absolute;
+  top: 0;
+  height: 20px;
+}
+.positionSegment { background: var(--blue); }
+.cashSegment {
+  border: 1px solid var(--blue);
+  background: var(--white);
+}
+.zeroLine {
+  z-index: 2;
+  width: 1px;
+  background: var(--black);
+}
+
+.errorBanner {
+  position: fixed;
+  z-index: 20;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 10px 16px;
+  color: var(--white);
+  background: var(--black);
+}
+.centerState {
+  display: grid;
+  min-height: 100vh;
+  place-content: center;
+  justify-items: center;
+  gap: 14px;
+  color: var(--black);
+  background: var(--white);
+  font-size: var(--secondary-size);
+}
 
 @media (max-width: 1100px) {
   .workstation { grid-template-columns: minmax(160px, 18fr) minmax(440px, 58fr) minmax(180px, 24fr); }
   .market,
-  .privateInformation,
-  .publicInformation,
+  .research,
   .portfolio,
   .players { padding: 12px; }
   .marketCompany { grid-template-columns: 15px minmax(0, 1fr) auto; gap: 5px; }
   .marketCompany .stockPattern { width: 15px; height: 11px; }
   .marketCompany .positive,
-  .marketCompany .negative { grid-column: 2 / -1; justify-self: end; }
+  .marketCompany .negative {
+    grid-column: 2 / -1;
+    justify-self: end;
+  }
+  .actionDock { grid-template-columns: 94px minmax(0, 1fr) auto; padding-inline: 12px; gap: 10px; }
 }
 
 @media (max-width: 899px) {
   .workstation {
     grid-template-columns: 1fr 1fr;
     grid-template-rows: 42px auto minmax(560px, 1fr) minmax(170px, auto) minmax(170px, auto) minmax(120px, auto);
-    grid-template-areas: "status status" "market market" "stockpiles stockpiles" "private portfolio" "public players" "dock dock";
+    grid-template-areas:
+      "status status"
+      "market market"
+      "stockpiles stockpiles"
+      "research portfolio"
+      "research players"
+      "dock dock";
     height: auto;
     min-height: 100vh;
   }
   .marketList { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .stockpileField { overflow: visible; }
-  .workstationTerminal {
-    grid-template-rows: 42px auto minmax(500px, 1fr) minmax(170px, auto) minmax(170px, auto) minmax(120px, auto);
-    grid-template-areas: "status status" "market market" "terminal terminal" "private private" "public public" "dock dock";
-  }
 }
 
-@media (max-width: 560px) {
+@media (max-width: 680px) {
   .workstation {
     grid-template-columns: 1fr;
-    grid-template-rows: 42px auto minmax(720px, auto) auto auto auto auto auto;
-    grid-template-areas: "status" "market" "stockpiles" "private" "public" "portfolio" "players" "dock";
+    grid-template-rows: 42px auto minmax(720px, auto) auto auto auto auto;
+    grid-template-areas:
+      "status"
+      "market"
+      "stockpiles"
+      "research"
+      "portfolio"
+      "players"
+      "dock";
   }
   .status { padding-inline: 10px; }
   .marketList { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .stockpileGrid { grid-template-columns: 1fr; }
-  .actionDock { grid-template-columns: 1fr; }
-  .workstationTerminal {
-    grid-template-rows: 42px auto minmax(500px, auto) auto auto auto;
-    grid-template-areas: "status" "market" "terminal" "private" "public" "dock";
+  .actionDock {
+    grid-template-columns: 1fr;
+    overflow: visible;
+  }
+  .dockControls {
+    justify-self: end;
+    gap: 8px;
   }
 }
