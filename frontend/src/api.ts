@@ -1,6 +1,5 @@
 import type {
   ApiFailure,
-  ChatMessage,
   CreateGameRequest,
   CreateGameResponse,
   GameView,
@@ -73,16 +72,6 @@ export const submitGameAction = (
     headers: authorized(token),
     body: JSON.stringify({ action_id: actionId, expected_revision: expectedRevision }),
   });
-
-export const postChat = (gameId: string, token: string, message: string) =>
-  request<{ schema_version: "1.0"; chat_message: ChatMessage }>(
-    `/api/v1/games/${encodeURIComponent(gameId)}/chat`,
-    {
-      method: "POST",
-      headers: authorized(token),
-      body: JSON.stringify({ message }),
-    },
-  );
 
 export const seatStorageKey = (gameId: string) => `stockpile.seatToken:${gameId}`;
 

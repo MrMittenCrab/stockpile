@@ -10,7 +10,7 @@ export function App() {
   const token = useMemo(() => gameId ? claimFragmentToken(gameId) : null, [gameId]);
   if (!gameId) return <SetupPage />;
   if (!token) {
-    return <main className="missing-seat"><small>FIXED SEAT REQUIRED</small><h1>This tab has no seat token.</h1><p>Use one of the seat links created at setup.</p><a href="/">Create a new game</a></main>;
+    return <main className="missing-seat"><h1>NO SEAT</h1><p>Open a seat link.</p><a href="/">HOME</a></main>;
   }
   return <GamePage gameId={gameId} token={token} />;
 }

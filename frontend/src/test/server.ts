@@ -25,10 +25,25 @@ export const gameView: GameView = {
   round: 3, total_rounds: 6, phase: "demand", phase_step: "demand_bid",
   viewer: { player_id: 0, name: "Ada" }, active_player_id: 0,
   companies: [
-    { company_id: 0, symbol: "A", name: "Arc", price: 47, color: "#d33" },
-    { company_id: 1, symbol: "B", name: "Bolt", price: 3, color: "#39c" },
+    { company_id: 0, symbol: "A", name: "Cosmic Computers", display_name: "COSMIC", pattern: "matrix", price: 47, color: "#002FA7" },
+    { company_id: 1, symbol: "B", name: "Bottomline Bank", display_name: "BOTTOMLINE", pattern: "ledger", price: 3, color: "#002FA7" },
+    { company_id: 2, symbol: "C", name: "Leading Laboratories", display_name: "LEADING", pattern: "molecular", price: 11, color: "#002FA7" },
+    { company_id: 3, symbol: "D", name: "American Automotive", display_name: "AMERICAN", pattern: "chevron", price: 8, color: "#002FA7" },
+    { company_id: 4, symbol: "E", name: "Stanford Steel", display_name: "STANFORD", pattern: "crosshatch", price: 5, color: "#002FA7" },
+    { company_id: 5, symbol: "F", name: "Epic Electric", display_name: "EPIC", pattern: "wave", price: 9, color: "#002FA7" },
   ],
-  stockpiles: Array.from({ length: 7 }, (_, index) => ({ stockpile_id: index, visible_cards: index === 0 ? [{ visibility: "visible", kind: "stock", company_id: 0, company: "Arc", quantity: 3 }] : [], hidden_cards: index % 2 ? [{ visibility: "hidden" as const }] : [], marker: null, bid: null, locked: false, purchaser_id: null })),
+  stockpiles: Array.from({ length: 7 }, (_, index) => ({
+    stockpile_id: index,
+    visible_cards: index === 0 ? [
+      { visibility: "visible" as const, kind: "stock" as const, company_id: 0, company: "Cosmic Computers", quantity: 3 },
+      { visibility: "visible" as const, kind: "trading_fee" as const, amount: 4 },
+    ] : [],
+    hidden_cards: index === 0 || index % 2 ? [{ visibility: "hidden" as const }] : [],
+    marker: null,
+    bid: null,
+    locked: false,
+    purchaser_id: null,
+  })),
   players: [
     { player_id: 0, name: "Ada", cash: 13, active: true, status: "Choosing bid", fee_debts: [], bid_markers: [{ player_id: 0, marker_index: 0, status: "placed", stockpile_id: 0, bid: 0 }, { player_id: 0, marker_index: 1, status: "available", stockpile_id: null, bid: null }] },
     { player_id: 1, name: "Lin", cash: 99, active: false, status: "Waiting", fee_debts: [4, 7], bid_markers: [{ player_id: 1, marker_index: 0, status: "outbid", stockpile_id: null, bid: null }, { player_id: 1, marker_index: 1, status: "available", stockpile_id: null, bid: null }] },

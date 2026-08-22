@@ -52,6 +52,8 @@ export interface ActionCard {
   visibility: "visible";
   kind: "action";
   effect: string;
+  direction: "up" | "down";
+  movement: number;
 }
 export interface InformationCard {
   visibility: "visible";
@@ -67,6 +69,14 @@ export interface Company {
   company_id: number;
   symbol: string;
   name: string;
+  display_name: string;
+  pattern:
+    | "matrix"
+    | "ledger"
+    | "molecular"
+    | "chevron"
+    | "crosshatch"
+    | "wave";
   price: number;
   color: string;
 }

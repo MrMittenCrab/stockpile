@@ -1,17 +1,12 @@
-import { useMemo, useState } from "react";
-import { seatLink } from "../api";
-import type {
-  BidMarker,
-  Company,
-  GameView,
-  LegalAction,
-  PublicPlayer,
-  Stockpile,
-} from "../types";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import type { Card, Company, GameView, LegalAction, Stockpile } from "../types";
 import { useGameSession } from "../useGameSession";
-import { CardView } from "./CardView";
+import { CardView, CompanyCard, HoldingCard } from "./CardView";
 import { Selectable } from "./Selectable";
+import { StockPattern } from "./StockPattern";
 import styles from "./Game.module.css";
+
+type MarketEvent = GameView["recent_events"][number];
 
 function money(value: number) {
   return `$${value}K`;
@@ -23,350 +18,301 @@ function idNumber(target: string | null, prefix: string) {
   return Number.isFinite(result) ? result : null;
 }
 
-function BidToken({ marker, players }: { marker: BidMarker; players: PublicPlayer[] }) {
-  const player = players.find((item) => item.player_id === marker.player_id);
-  return (
-    <span
-      className={`${styles.bidToken} ${styles[`player${marker.player_id % 5}`]} ${marker.status === "outbid" || marker.status === "rebidding" ? styles.tokenAlert : ""}`}
-      title={`${player?.name ?? "Player"} position ${marker.marker_index + 1}: ${marker.status}`}
-      aria-label={`${player?.name ?? "Player"} bid marker ${marker.marker_index + 1}`}
-    >
-      {marker.marker_index + 1}
-    </span>
-  );
+function companyById(view: GameView, companyId: number | null) {
+  return companyId === null ? undefined : view.companies.find((company) => company.company_id === companyId);
 }
 
-function TopBar({ view, token }: { view: GameView; token: string }) {
-  const [menu, setMenu] = useState(false);
+function Status({ view }: { view: GameView }) {
   const actor = view.players.find((player) => player.player_id === view.active_player_id);
-  const actingLabel =
-    view.pending_decision.kind === "private_selling"
-      ? "Private selling in progress"
-      : actor
-        ? `${actor.name} to act`
-        : view.terminal_results
-          ? "Game complete"
-          : view.pending_decision.prompt;
-  async function copyLink() {
-    await navigator.clipboard.writeText(seatLink(view.game_id, token));
-    setMenu(false);
-  }
+  let turn = "WAIT";
+  if (view.terminal_results) turn = "GAME END";
+  else if (view.pending_decision.kind === "private_selling") turn = "PRIVATE SELLING";
+  else if (actor?.player_id === view.viewer.player_id) turn = "YOUR TURN";
+  else if (actor) turn = `${actor.name.toUpperCase()} TURN`;
   return (
-    <header className={styles.topBar}>
-      <a className={styles.brand} href="/">STOCKPILE</a>
-      <span className={styles.round}>Round {view.round} / {view.total_rounds}</span>
-      <span className={styles.phase}>{view.phase.toUpperCase()}</span>
-      <span className={styles.actor}>{actingLabel}</span>
-      <div className={styles.menuWrap}>
-        <button className={styles.menuButton} type="button" aria-label="Game menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>•••</button>
-        {menu && (
-          <div className={styles.menu}>
-            <button type="button" onClick={() => void copyLink()}>Copy seat link</button>
-            <a href="/">New game</a>
-          </div>
-        )}
-      </div>
+    <header className={`${styles.module} ${styles.status}`} aria-label="Status">
+      <span>ROUND {view.round} / {view.total_rounds}</span>
+      <span>{view.phase.toUpperCase()}</span>
+      <span>{turn}</span>
     </header>
   );
 }
 
-function MarketStrip({ view, onAction, disabled }: { view: GameView; onAction: (id: number) => void; disabled: boolean }) {
+function Market({ view, movements, onAction, disabled }: { view: GameView; movements: MarketEvent[]; onAction: (id: number) => void; disabled: boolean }) {
   const targets = new Map<number, LegalAction>();
   for (const action of view.legal_actions.filter((item) => item.control === "company")) {
-    const company = idNumber(action.target_id, "company");
-    if (company !== null) targets.set(company, action);
+    const companyId = idNumber(action.target_id, "company");
+    if (companyId !== null) targets.set(companyId, action);
   }
   return (
-    <section className={styles.market} aria-label="Market">
-      <div className={styles.sectionLabel}>MARKET</div>
-      <div className={styles.marketRow}>
+    <section className={`${styles.module} ${styles.market}`} aria-label="Market">
+      <span className={styles.moduleLabel}>MARKET</span>
+      <div className={styles.marketList}>
         {view.companies.map((company) => {
           const action = targets.get(company.company_id);
-          const content = <CompanyPrice company={company} actionable={Boolean(action)} />;
+          const movement = movements.find((event) => event.company_id === company.company_id);
+          const item = (
+            <div className={styles.marketCompany}>
+              <StockPattern pattern={company.pattern} />
+              <span className={styles.marketName}>{company.display_name}</span>
+              <span className={styles.marketPrice}>{company.price}</span>
+              {movement?.actual_delta !== null && movement?.actual_delta !== undefined && (
+                <span aria-live="polite" className={movement.actual_delta > 0 ? styles.priceUp : styles.priceDown}>
+                  {movement.actual_delta > 0 ? "↑" : "↓"}{Math.abs(movement.actual_delta)}
+                </span>
+              )}
+            </div>
+          );
           return action ? (
-            <Selectable key={company.company_id} data-action-id={action.action_id} aria-label={action.label} className={styles.companyTarget} disabled={disabled} onClick={() => onAction(action.action_id)}>{content}</Selectable>
-          ) : <div key={company.company_id}>{content}</div>;
+            <Selectable key={company.company_id} className={styles.companyTarget} data-action-id={action.action_id} aria-label={action.label} disabled={disabled} onClick={() => onAction(action.action_id)}>{item}</Selectable>
+          ) : <div key={company.company_id}>{item}</div>;
         })}
       </div>
     </section>
   );
 }
 
-function CompanyPrice({ company, actionable }: { company: Company; actionable: boolean }) {
+function InformationPair({ card, companies }: { card: Card; companies: Company[] }) {
+  if (card.visibility === "hidden") {
+    return (
+      <div className={styles.informationPair}>
+        <CardView card={card} companies={companies} scale="information" />
+        <CardView card={card} companies={companies} scale="information" />
+      </div>
+    );
+  }
+  if (card.kind !== "company_forecast") return <CardView card={card} companies={companies} scale="information" />;
+  const company = companies.find((item) => item.company_id === card.company_id);
   return (
-    <div className={`${styles.company} ${actionable ? styles.actionable : ""}`} style={{ "--company": company.color } as React.CSSProperties}>
-      <span className={styles.companySymbol}>{company.symbol}</span>
-      <div><strong>{company.price}</strong><small>{company.name}</small></div>
+    <div className={styles.informationPair}>
+      {company ? <CompanyCard company={company} /> : <span />}
+      <CardView card={card} companies={companies} scale="information" />
     </div>
   );
 }
 
-function StockpilePanel({ pile, view, action, onAction, disabled }: { pile: Stockpile; view: GameView; action?: LegalAction; onAction: (id: number) => void; disabled: boolean }) {
-  const known = view.private.known_pile_cards.filter((item) => item.stockpile_id === pile.stockpile_id);
-  const selected = view.pending_decision.selected_stockpile_id === pile.stockpile_id;
-  const panel = (
-    <article className={`${styles.pile} ${selected ? styles.selectedPile : ""} ${pile.locked ? styles.locked : ""} ${pile.purchaser_id !== null ? styles.purchased : ""}`}>
-      <header><span>STOCKPILE {pile.stockpile_id + 1}</span>{pile.locked && <small>LOCKED</small>}</header>
-      <div className={styles.cardFan}>
-        {pile.visible_cards.map((card, index) => <CardView key={`v${index}`} card={card} compact />)}
-        {pile.hidden_cards.map((card, index) => <CardView key={`h${index}`} card={card} compact />)}
-        {!pile.visible_cards.length && !pile.hidden_cards.length && <span className={styles.emptyPile}>Awaiting cards</span>}
-      </div>
-      {known.length > 0 && (
-        <div className={styles.privateNote} title="Private knowledge">You know {known.length} hidden card{known.length === 1 ? "" : "s"}</div>
-      )}
-      <footer>
-        <div className={styles.bidStatus}>
-          {pile.marker && <BidToken marker={pile.marker} players={view.players} />}
-          <strong>{pile.bid === null ? "NO BID" : money(pile.bid)}</strong>
-        </div>
-        {pile.purchaser_id !== null && <small>Won by {view.players.find((player) => player.player_id === pile.purchaser_id)?.name}</small>}
-      </footer>
-    </article>
-  );
-  return action ? (
-    <Selectable data-action-id={action.action_id} aria-label={action.label} className={styles.pileButton} selected={selected} disabled={disabled} onClick={() => onAction(action.action_id)}>{panel}</Selectable>
-  ) : panel;
-}
-
-function StockpileGrid({ view, onAction, disabled }: { view: GameView; onAction: (id: number) => void; disabled: boolean }) {
-  const pileActions = new Map<number, LegalAction>();
-  for (const action of view.legal_actions.filter((item) => item.control === "stockpile")) {
-    const pile = idNumber(action.target_id, "stockpile");
-    if (pile !== null) pileActions.set(pile, action);
-  }
+function PrivateInformation({ view }: { view: GameView }) {
+  const slots = view.private.market_information.filter((slot) => slot.visibility === "private");
   return (
-    <section className={`${styles.stockpileGrid} ${view.configuration.player_count === 2 && view.stockpiles.length === 4 ? styles.twoPlayerGrid : ""}`} aria-label="Stockpiles">
-      {view.stockpiles.map((pile) => <StockpilePanel key={pile.stockpile_id} pile={pile} view={view} action={pileActions.get(pile.stockpile_id)} onAction={onAction} disabled={disabled} />)}
-    </section>
-  );
-}
-
-function ActionButton({ action, onAction, disabled }: { action: LegalAction; onAction: (id: number) => void; disabled: boolean }) {
-  return <Selectable data-action-id={action.action_id} aria-label={action.label} disabled={disabled} onClick={() => onAction(action.action_id)}><strong>{action.amount === null ? action.label : money(action.amount)}</strong></Selectable>;
-}
-
-function ActionDock({ view, onAction, disabled }: { view: GameView; onAction: (id: number) => void; disabled: boolean }) {
-  const inlineActions = view.legal_actions.filter((action) => !["stockpile", "company"].includes(action.control));
-  const holding = view.private.holdings.find((item) => item.company_id === view.pending_decision.company_id);
-  const choosingSupplyTarget = view.phase.toLowerCase() === "supply" && inlineActions.every((action) => action.control !== "card");
-  const choosingActionTarget = view.phase.toLowerCase() === "action" && inlineActions.every((action) => action.control !== "action_card");
-  return (
-    <section className={styles.actionDock} aria-label="Action dock">
-      <div className={styles.dockPrompt}>
-        <small>{view.viewer.name}</small>
-        <strong>{view.pending_decision.prompt}</strong>
-        {holding && <span>{holding.company}: {holding.represented} shares at {money(holding.price)}</span>}
-        {view.pending_decision.private_progress !== null && view.pending_decision.private_total !== null && <span>{view.pending_decision.private_progress + 1} / {view.pending_decision.private_total}</span>}
-      </div>
-      <div className={styles.actionChoices}>
-        {choosingSupplyTarget && view.private.hand.map((card, index) => (
-          <div key={`supply-context:${index}`} className={`${styles.contextCard} ${view.pending_decision.selected_card_index === index ? styles.contextSelected : ""}`}>
-            <CardView card={card} compact />
-            <small>{view.pending_decision.selected_card_index === index ? "SELECTED" : "DRAWN"}</small>
-          </div>
-        ))}
-        {choosingActionTarget && view.private.available_action_cards.map((card, index) => (
-          <div key={`action-context:${index}`} className={`${styles.contextCard} ${view.pending_decision.selected_action_effect?.toLowerCase() === card.effect.toLowerCase() ? styles.contextSelected : ""}`}>
-            <CardView card={card} compact />
-            <small>{view.pending_decision.selected_action_effect?.toLowerCase() === card.effect.toLowerCase() ? "SELECTED" : "AVAILABLE"}</small>
-          </div>
-        ))}
-        {view.phase.toLowerCase() === "selling" && (
-          <div className={styles.portfolioStrip} aria-label="Your portfolio">
-            {view.private.holdings.map((item) => (
-              <span key={item.company_id} className={item.company_id === view.pending_decision.company_id ? styles.portfolioCurrent : ""}>
-                <b>{item.company.slice(0, 1).toUpperCase()}</b>
-                <strong>{item.represented}</strong>
-                <small>@ {money(item.price)}</small>
-              </span>
-            ))}
-          </div>
-        )}
-        {inlineActions.map((action) => {
-          if (action.control === "card") {
-            const cardIndex = idNumber(action.target_id, "hand");
-            const card = cardIndex === null ? undefined : view.private.hand[cardIndex];
-            return <Selectable key={action.action_id} data-action-id={action.action_id} aria-label={action.label} className={styles.cardChoice} disabled={disabled} onClick={() => onAction(action.action_id)}>{card ? <CardView card={card} /> : action.label}</Selectable>;
-          }
-          if (action.control === "action_card") {
-            const effect = action.target_id?.split(":")[1];
-            const card = view.private.available_action_cards.find((item) => item.effect.toLowerCase() === effect?.toLowerCase());
-            return <Selectable key={action.action_id} data-action-id={action.action_id} aria-label={action.label} className={styles.cardChoice} disabled={disabled} onClick={() => onAction(action.action_id)}>{card ? <CardView card={card} /> : action.label}</Selectable>;
-          }
-          if (action.control === "sell" && action.sale_preview) {
-            const preview = action.sale_preview;
-            return (
-              <Selectable key={action.action_id} data-action-id={action.action_id} aria-label={action.label} className={styles.saleChoice} disabled={disabled} onClick={() => onAction(action.action_id)}>
-                <strong>{preview.quantity === 0 ? "Hold" : `Sell ${preview.quantity}`}</strong>
-                <span>{preview.quantity === 0 ? `${preview.resulting_represented} retained` : `+${money(preview.gross_value)}`}</span>
-              </Selectable>
-            );
-          }
-          return <ActionButton key={action.action_id} action={action} onAction={onAction} disabled={disabled} />;
-        })}
-        {!inlineActions.length && view.pending_decision.kind === "waiting" && <span className={styles.waiting}>Your seat stays fixed. This view will update automatically.</span>}
-        {!inlineActions.length && view.pending_decision.kind === "private_selling" && <span className={styles.waiting}>Other sale choices remain sealed until settlement.</span>}
-      </div>
-    </section>
-  );
-}
-
-function ChatPanel({ view, sendChat }: { view: GameView; sendChat: (message: string) => Promise<void> }) {
-  const [message, setMessage] = useState("");
-  const [sending, setSending] = useState(false);
-  async function submit(event: React.FormEvent) {
-    event.preventDefault();
-    if (!message.trim() || sending) return;
-    setSending(true);
-    try { await sendChat(message); setMessage(""); } finally { setSending(false); }
-  }
-  return (
-    <section className={`${styles.railPanel} ${styles.chatPanel}`}>
-      <h2>CHAT</h2>
-      <div className={styles.messages} aria-live="polite">
-        {view.chat.map((entry) => <p key={entry.message_id}><strong>{entry.player_name}</strong><span>{entry.message}</span></p>)}
-        {!view.chat.length && <span className={styles.muted}>Local game chat</span>}
-      </div>
-      <form onSubmit={submit}><input aria-label="Chat message" maxLength={500} value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Message" /><button disabled={sending || !message.trim()}>Send</button></form>
-    </section>
-  );
-}
-
-function MarketInfoPanel({ view }: { view: GameView }) {
-  return (
-    <section className={styles.railPanel}>
-      <h2>MARKET INFORMATION</h2>
-      <div className={styles.infoGrid}>
-        {view.private.market_information.map((slot, index) => (
-          <div key={index} className={`${styles.infoSlot} ${styles[slot.visibility]}`}>
-            <CardView card={slot.card} compact />
-            <small>{slot.visibility}</small>
-          </div>
-        ))}
-      </div>
+    <section className={`${styles.module} ${styles.privateInformation}`} aria-label="Private information">
+      <span className={styles.moduleLabel}>PRIVATE</span>
+      <div className={styles.informationList}>{slots.map((slot, index) => <InformationPair key={index} card={slot.card} companies={view.companies} />)}</div>
       {view.private.known_pile_cards.length > 0 && (
         <div className={styles.knownCards} aria-label="Private pile knowledge">
-          <small>PRIVATE PILE KNOWLEDGE</small>
-          <div>
-            {view.private.known_pile_cards.map((item, index) => (
-              <span key={`${item.stockpile_id}:${index}`}>
-                <b>Pile {item.stockpile_id + 1}</b>
-                <CardView card={item.card} compact />
-              </span>
-            ))}
-          </div>
+          {view.private.known_pile_cards.map((item, index) => (
+            <div key={`${item.stockpile_id}:${index}`}><span>S{item.stockpile_id + 1}</span><CardView card={item.card} companies={view.companies} scale="information" /></div>
+          ))}
         </div>
       )}
     </section>
   );
 }
 
-function PlayersPanel({ view }: { view: GameView }) {
+function PublicInformation({ view }: { view: GameView }) {
+  const slots = view.private.market_information.filter((slot) => slot.visibility !== "private");
   return (
-    <section className={`${styles.railPanel} ${styles.playersPanel}`}>
-      <h2>PLAYERS</h2>
-      <div className={styles.playerList}>
-        {view.players.map((player) => (
-          <div key={player.player_id} className={`${styles.playerRow} ${player.active ? styles.activePlayer : ""} ${player.player_id === view.viewer.player_id ? styles.viewer : ""}`}>
-            <span className={`${styles.playerDot} ${styles[`player${player.player_id % 5}`]}`} />
-            <div>
-              <strong>{player.name}</strong>
-              <small>{player.status}{player.player_id === view.viewer.player_id ? " · You" : ""}</small>
-              {player.fee_debts.length > 0 && <small className={styles.feeDebt}>Fees due: {player.fee_debts.map(money).join(" · ")}</small>}
-            </div>
-            <span className={styles.playerCash}>{money(player.cash)}</span>
-            <div className={styles.markerShelf}>{player.bid_markers.map((marker) => <BidToken key={marker.marker_index} marker={marker} players={view.players} />)}</div>
-          </div>
-        ))}
-      </div>
+    <section className={`${styles.module} ${styles.publicInformation}`} aria-label="Public information">
+      <span className={styles.moduleLabel}>PUBLIC</span>
+      <div className={styles.informationList}>{slots.map((slot, index) => <InformationPair key={index} card={slot.card} companies={view.companies} />)}</div>
     </section>
   );
 }
 
-function latestMovementBatch(view: GameView) {
-  const movement = view.recent_events.filter((event) => event.cause === "market_forecast");
-  const latestRound = movement.reduce((round, event) => Math.max(round, event.round), -1);
-  return movement.filter((event) => event.round === latestRound);
+function bidderLabel(view: GameView, pile: Stockpile) {
+  if (!pile.marker) return null;
+  if (pile.marker.player_id === view.viewer.player_id) return "YOU";
+  return view.players.find((player) => player.player_id === pile.marker?.player_id)?.name.toUpperCase() ?? `P${pile.marker.player_id + 1}`;
 }
 
-function EventToast({ view }: { view: GameView }) {
-  const latest = view.recent_events.at(-1);
-  if (!latest) return null;
-  const movementBatch = latestMovementBatch(view);
-  const events = movementBatch.length > 0 ? movementBatch : [latest];
+function Stack({ cards, companies }: { cards: Card[]; companies: Company[] }) {
   return (
-    <div className={styles.event} aria-label={movementBatch.length > 0 ? "Latest market movement" : "Latest market event"}>
-      {movementBatch.length > 0 && <small>ROUND {latest.round} MOVEMENT</small>}
-      {events.map((event) => (
-        <span key={event.event_id}>
-          <b>{event.company ?? "Market"}</b>
-          <em>{event.forecast === null ? event.description : String(event.forecast)}</em>
-          {event.resulting_price !== null && <strong>{event.prior_price} → {event.resulting_price}</strong>}
-        </span>
+    <div className={styles.stack} style={{ "--stack-count": Math.max(cards.length, 1) } as CSSProperties}>
+      {cards.map((card, index) => (
+        <div key={index} className={styles.stackLayer} data-stack-card style={{ "--stack-index": index, zIndex: cards.length - index } as CSSProperties}>
+          <CardView card={card} companies={companies} scale="stockpile" stackEdge={index > 0} />
+        </div>
       ))}
     </div>
   );
 }
 
-function GameEnd({ view }: { view: GameView }) {
-  if (!view.terminal_results) return null;
-  const finalMovement = latestMovementBatch(view);
+function StockpileItem({ pile, view, action, onAction, disabled }: { pile: Stockpile; view: GameView; action?: LegalAction; onAction: (id: number) => void; disabled: boolean }) {
+  const selected = view.pending_decision.selected_stockpile_id === pile.stockpile_id;
+  const cards: Card[] = [...pile.visible_cards, ...pile.hidden_cards];
+  const content = (
+    <>
+      <Stack cards={cards} companies={view.companies} />
+      {pile.bid !== null && <span className={styles.bid}>{bidderLabel(view, pile)} {pile.bid}K</span>}
+    </>
+  );
   return (
-    <section className={styles.gameEnd}>
-      <header><small>GAME END</small><h1>{view.terminal_results.winner_ids.length > 1 ? "Joint winners" : "Winner"}: {view.terminal_results.players.filter((item) => item.winner).map((item) => item.player_name).join(" & ")}</h1></header>
-      {finalMovement.length > 0 && (
-        <section className={styles.finalMovement} aria-label="Final market movement">
-          <h2>FINAL MARKET MOVEMENT</h2>
-          <div>
-            {finalMovement.map((event) => (
-              <span key={event.event_id}>
-                <b>{event.company ?? "Market"}</b>
-                <em>{event.forecast === null ? event.description : String(event.forecast)}</em>
-                <strong>{event.prior_price} → {event.resulting_price}</strong>
-              </span>
-            ))}
-          </div>
-        </section>
-      )}
-      <div className={styles.rankings}>
-        {[...view.terminal_results.players].sort((a, b) => a.rank - b.rank).map((player) => (
-          <article key={player.player_id} className={player.winner ? styles.winner : ""}>
-            <span className={styles.rank}>#{player.rank}</span><h2>{player.player_name}</h2><strong>{money(player.final_cash)}</strong>
-            <small>{money(player.cash_before_liquidation)} cash + {money(player.liquidation_value)} liquidation</small>
-            <div>{player.liquidation.filter((line) => line.represented_shares > 0).map((line) => <span key={line.company_id}>{line.company} {line.represented_shares} × {money(line.unit_price)} = {money(line.value)}</span>)}</div>
-          </article>
-        ))}
+    <article className={`${styles.stockpile} ${selected ? styles.stockpileSelected : ""}`} aria-label={`Stockpile ${pile.stockpile_id + 1}`} data-stockpile-id={pile.stockpile_id}>
+      {action ? <Selectable className={styles.pileSelector} selected={selected} data-action-id={action.action_id} aria-label={action.label} disabled={disabled} onClick={() => onAction(action.action_id)}>{content}</Selectable> : content}
+    </article>
+  );
+}
+
+function StockpileField({ view, onAction, disabled }: { view: GameView; onAction: (id: number) => void; disabled: boolean }) {
+  const targets = new Map<number, LegalAction>();
+  for (const action of view.legal_actions.filter((item) => item.control === "stockpile")) {
+    const pileId = idNumber(action.target_id, "stockpile");
+    if (pileId !== null) targets.set(pileId, action);
+  }
+  return (
+    <main className={`${styles.module} ${styles.stockpileField}`} data-testid="stockpile-field" aria-label="Stockpiles">
+      <div className={`${styles.stockpileGrid} ${view.stockpiles.length === 4 ? styles.fourPiles : ""}`}>
+        {view.stockpiles.map((pile) => <StockpileItem key={pile.stockpile_id} pile={pile} view={view} action={targets.get(pile.stockpile_id)} onAction={onAction} disabled={disabled} />)}
       </div>
-      <a href="/" className={styles.newGame}>New game</a>
+    </main>
+  );
+}
+
+function Portfolio({ view }: { view: GameView }) {
+  return (
+    <section className={`${styles.module} ${styles.portfolio}`} aria-label="Portfolio">
+      <span className={styles.moduleLabel}>PORTFOLIO</span>
+      <div className={styles.portfolioCards}>
+        {view.private.holdings.filter((holding) => holding.represented > 0).map((holding) => {
+          const company = companyById(view, holding.company_id);
+          return company ? <HoldingCard key={holding.company_id} company={company} quantity={holding.represented} /> : null;
+        })}
+      </div>
     </section>
   );
 }
 
-export function GamePage({ gameId, token }: { gameId: string; token: string }) {
-  const { view, error, submitting, act, sendChat } = useGameSession(gameId, token);
-  const phaseClass = useMemo(() => view?.phase.toLowerCase().replace(/[^a-z]/g, "") ?? "", [view?.phase]);
-  if (!view && !error) return <main className={styles.centerState}><div className={styles.loader} /><span>Opening your seat…</span></main>;
-  if (!view) return <main className={styles.centerState}><h1>Seat unavailable</h1><p>{error}</p><a href="/">Create a new game</a></main>;
+function Players({ view }: { view: GameView }) {
   return (
-    <div className={`${styles.game} ${styles[phaseClass] ?? ""}`}>
-      <TopBar view={view} token={token} />
-      {view.terminal_results ? <GameEnd view={view} /> : (
-        <div className={styles.layout}>
-          <main className={styles.board}>
-            {error && <div className={styles.errorBanner} role="alert">{error}</div>}
-            <MarketStrip view={view} onAction={(id) => void act(id)} disabled={submitting} />
-            <StockpileGrid view={view} onAction={(id) => void act(id)} disabled={submitting} />
-            <EventToast view={view} />
-            <ActionDock view={view} onAction={(id) => void act(id)} disabled={submitting} />
-          </main>
-          <aside className={styles.rail}>
-            <ChatPanel view={view} sendChat={sendChat} />
-            <MarketInfoPanel view={view} />
-            <PlayersPanel view={view} />
-          </aside>
-        </div>
-      )}
+    <section className={`${styles.module} ${styles.players}`} aria-label="Players">
+      <span className={styles.moduleLabel}>PLAYERS</span>
+      <div className={styles.playerList}>
+        {view.players.map((player) => <div key={player.player_id}><span>{player.player_id === view.viewer.player_id ? "YOU" : player.name.toUpperCase()}</span><span>{money(player.cash)}</span></div>)}
+      </div>
+    </section>
+  );
+}
+
+function actionText(action: LegalAction) {
+  if (action.control === "bid" && action.amount !== null) return `${action.amount}K`;
+  if (action.amount !== null) return money(action.amount);
+  return action.label.toUpperCase();
+}
+
+function dockPrompt(view: GameView) {
+  const viewer = view.players.find((player) => player.player_id === view.viewer.player_id);
+  const rebidding = viewer?.bid_markers.some((marker) => marker.status === "outbid" || marker.status === "rebidding") ?? false;
+  switch (view.pending_decision.kind) {
+    case "supply_card": return "Select card";
+    case "supply_face_up_pile":
+    case "supply_face_down_pile": return "Select pile";
+    case "bid_pile": return rebidding ? "Rebid" : "Select pile";
+    case "bid_amount": return rebidding ? "Rebid" : "Bid";
+    case "action_card": return "Select card";
+    case "action_company": return "Select company";
+    case "sell": return "Sell?";
+    case "dividend_claim":
+    case "acknowledge": return "Continue";
+    case "waiting":
+    case "private_selling": return "Wait";
+    case "terminal": return "";
+    case "generic": return view.legal_actions.length ? "Continue" : "Wait";
+  }
+}
+
+function ActionDock({ view, onAction, disabled }: { view: GameView; onAction: (id: number) => void; disabled: boolean }) {
+  if (view.terminal_results) {
+    return <section className={`${styles.module} ${styles.actionDock}`} aria-label="Action dock"><span className={styles.moduleLabel}>ACTION</span><a className={styles.actionControl} href="/">NEW GAME</a></section>;
+  }
+  const inline = view.legal_actions.filter((action) => action.control !== "stockpile" && action.control !== "company");
+  const selectedSupply = view.pending_decision.selected_card_index === null ? null : view.private.hand[view.pending_decision.selected_card_index];
+  const selectedImpact = view.private.available_action_cards.find((card) => card.effect.toLowerCase() === view.pending_decision.selected_action_effect?.toLowerCase());
+  const holding = view.private.holdings.find((item) => item.company_id === view.pending_decision.company_id);
+  const holdingCompany = holding ? companyById(view, holding.company_id) : undefined;
+  const prompt = dockPrompt(view);
+  return (
+    <section className={`${styles.module} ${styles.actionDock}`} aria-label="Action dock">
+      <div className={styles.dockHeading}><span className={styles.moduleLabel}>ACTION</span><span>{prompt}</span></div>
+      <div className={styles.dockContents}>
+        {selectedSupply && <CardView card={selectedSupply} companies={view.companies} scale="active" />}
+        {selectedImpact && <CardView card={selectedImpact} companies={view.companies} scale="active" />}
+        {view.phase.toLowerCase() === "selling" && holding && holdingCompany && <HoldingCard company={holdingCompany} quantity={holding.represented} scale="active" />}
+        {inline.map((action) => {
+          if (action.control === "card") {
+            const index = idNumber(action.target_id, "hand");
+            const card = index === null ? undefined : view.private.hand[index];
+            return <Selectable key={action.action_id} className={styles.cardAction} data-action-id={action.action_id} aria-label={action.label} disabled={disabled} onClick={() => onAction(action.action_id)}>{card ? <CardView card={card} companies={view.companies} scale="active" /> : actionText(action)}</Selectable>;
+          }
+          if (action.control === "action_card") {
+            const effect = action.target_id?.split(":")[1]?.toLowerCase();
+            const card = view.private.available_action_cards.find((item) => item.effect.toLowerCase() === effect);
+            return <Selectable key={action.action_id} className={styles.cardAction} data-action-id={action.action_id} aria-label={action.label} disabled={disabled} onClick={() => onAction(action.action_id)}>{card ? <CardView card={card} companies={view.companies} scale="active" /> : actionText(action)}</Selectable>;
+          }
+          if (action.control === "sell" && action.sale_preview) {
+            return <Selectable key={action.action_id} className={styles.saleAction} data-action-id={action.action_id} aria-label={action.label} disabled={disabled} onClick={() => onAction(action.action_id)}><span>{action.sale_preview.quantity === 0 ? "HOLD" : `SELL ${action.sale_preview.quantity}`}</span>{action.sale_preview.quantity > 0 && <span>+{money(action.sale_preview.gross_value)}</span>}</Selectable>;
+          }
+          return <Selectable key={action.action_id} className={styles.actionControl} data-action-id={action.action_id} aria-label={action.label} disabled={disabled} onClick={() => onAction(action.action_id)}>{actionText(action)}</Selectable>;
+        })}
+      </div>
+    </section>
+  );
+}
+
+function TerminalField({ view }: { view: GameView }) {
+  if (!view.terminal_results) return null;
+  return (
+    <main className={`${styles.module} ${styles.stockpileField} ${styles.terminal}`} data-testid="stockpile-field" aria-label="Game end">
+      <span className={styles.moduleLabel}>GAME END</span>
+      <div className={styles.rankings}>
+        {[...view.terminal_results.players].sort((left, right) => left.rank - right.rank).map((player) => (
+          <div key={player.player_id} className={styles.ranking}>
+            <span>#{player.rank}</span><span>{player.player_name.toUpperCase()}</span><span>{money(player.final_cash)}</span>{player.winner && <span>WINNER</span>}
+            <div className={styles.liquidation}>
+              {player.liquidation.filter((line) => line.represented_shares > 0).map((line) => {
+                const company = companyById(view, line.company_id);
+                return <span key={line.company_id}>{company && <StockPattern pattern={company.pattern} />} {line.represented_shares} × {money(line.unit_price)} = {money(line.value)}</span>;
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </main>
+  );
+}
+
+function currentMovement(view: GameView) {
+  const events = view.recent_events.filter((event) => event.company_id !== null && event.actual_delta !== null);
+  if (!events.length) return [];
+  const last = events.at(-1)!;
+  return events.filter((event) => event.round === last.round && event.cause === last.cause);
+}
+
+export function GamePage({ gameId, token }: { gameId: string; token: string }) {
+  const { view, error, submitting, act } = useGameSession(gameId, token);
+  const movementBatch = useMemo(() => view ? currentMovement(view) : [], [view]);
+  const movementKey = movementBatch.map((event) => event.event_id).join(":");
+  const [movements, setMovements] = useState<MarketEvent[]>([]);
+  useEffect(() => {
+    if (!movementKey) return;
+    setMovements(movementBatch);
+    const timer = window.setTimeout(() => setMovements([]), 2_400);
+    return () => window.clearTimeout(timer);
+  }, [movementKey]);
+
+  if (!view && !error) return <main className={styles.centerState}>OPENING SEAT</main>;
+  if (!view) return <main className={styles.centerState}><span>SEAT UNAVAILABLE</span><span>{error}</span><a href="/">NEW GAME</a></main>;
+  return (
+    <div className={styles.game}>
+      {error && <div className={styles.errorBanner} role="alert">{error}</div>}
+      <div className={styles.workstation} data-testid="workstation">
+        <Status view={view} />
+        <Market view={view} movements={movements} onAction={(id) => void act(id)} disabled={submitting} />
+        <PrivateInformation view={view} />
+        <PublicInformation view={view} />
+        {view.terminal_results ? <TerminalField view={view} /> : <StockpileField view={view} onAction={(id) => void act(id)} disabled={submitting} />}
+        <Portfolio view={view} />
+        <Players view={view} />
+        <ActionDock view={view} onAction={(id) => void act(id)} disabled={submitting} />
+      </div>
     </div>
   );
 }

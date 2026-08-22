@@ -158,6 +158,63 @@ class WebApiTest(unittest.TestCase):
             self.assertEqual(rejected.status_code, 401)
             self.assertEqual(rejected.headers["cache-control"], "no-store")
 
+    def test_company_patterns_and_action_direction_are_server_authored(self) -> None:
+        scenario = _FIXTURES["all_lite_options_market_impact"]
+        game_id, tokens, _payload = self.create_game(
+            rounds=scenario["round_count"],
+            options=scenario["options"],
+            seed=scenario["seed"],
+        )
+        first = self.view(game_id, tokens[0]).json()
+        self.assertEqual(
+            [company["display_name"] for company in first["companies"]],
+            ["COSMIC", "BOTTOMLINE", "LEADING", "AMERICAN", "STANFORD", "EPIC"],
+        )
+        self.assertEqual(
+            [company["pattern"] for company in first["companies"]],
+            ["matrix", "ledger", "molecular", "chevron", "crosshatch", "wave"],
+        )
+        self.assertEqual(
+            {company["color"] for company in first["companies"]}, {"#002FA7"}
+        )
+
+        for _step in range(200):
+            views = [self.view(game_id, token).json() for token in tokens]
+            action_cards = [
+                card
+                for view in views
+                for card in (
+                    view["private"]["hand"]
+                    + view["private"]["available_action_cards"]
+                    + [
+                        visible
+                        for stockpile in view["stockpiles"]
+                        for visible in stockpile["visible_cards"]
+                    ]
+                )
+                if card["kind"] == "action"
+            ]
+            if action_cards:
+                for card in action_cards:
+                    expected_direction = "up" if card["effect"] == "boom" else "down"
+                    self.assertEqual(card["direction"], expected_direction)
+                    self.assertEqual(card["movement"], 2)
+                break
+            player_id, current = next(
+                (index, view)
+                for index, view in enumerate(views)
+                if view["legal_actions"]
+            )
+            response = self.submit(
+                game_id,
+                tokens[player_id],
+                current,
+                current["legal_actions"][0]["action_id"],
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+        else:
+            self.fail("no Market Impact card became visible")
+
     def test_cross_seat_private_information_and_hidden_cards_are_strict(self) -> None:
         game_id, tokens, _payload = self.create_game(seed=13)
         first = self.view(game_id, tokens[0]).json()

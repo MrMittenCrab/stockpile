@@ -51,13 +51,14 @@ from .schemas import (
 )
 
 
-COMPANY_COLORS = (
-    "#da4f49",
-    "#e7ad3c",
-    "#42a874",
-    "#3e83c5",
-    "#8b65bd",
-    "#d97942",
+COMPANY_COLOR = "#002FA7"
+COMPANY_PRESENTATION = (
+    ("COSMIC", "matrix"),
+    ("BOTTOMLINE", "ledger"),
+    ("LEADING", "molecular"),
+    ("AMERICAN", "chevron"),
+    ("STANFORD", "crosshatch"),
+    ("EPIC", "wave"),
 )
 MAX_CHAT_MESSAGES = 200
 MAX_PUBLIC_ITEMS = 80
@@ -497,8 +498,10 @@ class SessionStore:
                 company_id=index,
                 symbol=name[:1].upper(),
                 name=name,
+                display_name=COMPANY_PRESENTATION[index][0],
+                pattern=COMPANY_PRESENTATION[index][1],
                 price=int(public["prices"][name]),
-                color=COMPANY_COLORS[index % len(COMPANY_COLORS)],
+                color=COMPANY_COLOR,
             )
             for index, name in enumerate(session.rule_set.company_names)
         ]
@@ -736,7 +739,7 @@ class SessionStore:
                 )
             )
         action_cards = [
-            ActionCardV1(effect=str(effect))
+            self._action_card(effect)
             for effect in information.acquired_actions
         ]
         return ViewerPrivateV1(
@@ -1093,7 +1096,23 @@ class SessionStore:
             )
         if kind == platform.CardType.TRADING_FEE.value:
             return TradingFeeCardV1(amount=abs(int(value or 0)))
-        return ActionCardV1(effect=str(effect or value or "Market Impact"))
+        return SessionStore._action_card(effect or value)
+
+    @staticmethod
+    def _action_card(effect: object) -> ActionCardV1:
+        effect_text = str(effect)
+        normalized = effect_text.strip().casefold()
+        if normalized in {"boom", "stock boom"}:
+            direction = "up"
+        elif normalized in {"bust", "stock bust"}:
+            direction = "down"
+        else:
+            raise ValueError(f"unsupported Market Impact effect {effect_text!r}")
+        return ActionCardV1(
+            effect=effect_text,
+            direction=direction,
+            movement=2,
+        )
 
     @staticmethod
     def _information_card(

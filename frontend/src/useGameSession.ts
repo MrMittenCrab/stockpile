@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ApiError,
   getGameView,
-  postChat,
   submitGameAction,
 } from "./api";
 import type { GameView } from "./types";
@@ -82,15 +81,5 @@ export function useGameSession(gameId: string, token: string) {
     [gameId, refresh, submitting, token, view],
   );
 
-  const sendChat = useCallback(
-    async (message: string) => {
-      const trimmed = message.trim();
-      if (!trimmed) return;
-      await postChat(gameId, token, trimmed);
-      await refresh();
-    },
-    [gameId, refresh, token],
-  );
-
-  return { view, error, submitting, act, sendChat, refresh };
+  return { view, error, submitting, act, refresh };
 }

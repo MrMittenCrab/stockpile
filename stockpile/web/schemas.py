@@ -150,6 +150,8 @@ class ActionCardV1(StrictModel):
     visibility: Literal["visible"] = "visible"
     kind: Literal["action"] = "action"
     effect: str
+    direction: Literal["up", "down"]
+    movement: Literal[2] = 2
 
 
 class InformationCardV1(StrictModel):
@@ -171,6 +173,15 @@ class CompanyV1(StrictModel):
     company_id: int
     symbol: str
     name: str
+    display_name: str
+    pattern: Literal[
+        "matrix",
+        "ledger",
+        "molecular",
+        "chevron",
+        "crosshatch",
+        "wave",
+    ]
     price: int
     color: str
 
