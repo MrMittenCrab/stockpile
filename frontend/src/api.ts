@@ -39,10 +39,10 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export const getSetup = (signal?: AbortSignal) =>
-  request<SetupResponse>("/api/v1/setup", { signal });
+  request<SetupResponse>("/api/v2/setup", { signal });
 
 export const createGame = (body: CreateGameRequest) =>
-  request<CreateGameResponse>("/api/v1/games", {
+  request<CreateGameResponse>("/api/v2/games", {
     method: "POST",
     body: JSON.stringify(body),
   });
@@ -56,7 +56,7 @@ export const getGameView = (
   token: string,
   signal?: AbortSignal,
 ) =>
-  request<GameView>(`/api/v1/games/${encodeURIComponent(gameId)}/view`, {
+  request<GameView>(`/api/v2/games/${encodeURIComponent(gameId)}/view`, {
     headers: authorized(token),
     signal,
   });
@@ -67,10 +67,34 @@ export const submitGameAction = (
   actionId: number,
   expectedRevision: number,
 ) =>
-  request<GameView>(`/api/v1/games/${encodeURIComponent(gameId)}/actions`, {
+  request<GameView>(`/api/v2/games/${encodeURIComponent(gameId)}/actions`, {
     method: "POST",
     headers: authorized(token),
     body: JSON.stringify({ action_id: actionId, expected_revision: expectedRevision }),
+  });
+
+export const submitSupplyPlan = (
+  gameId: string,
+  token: string,
+  planId: string,
+  expectedRevision: number,
+) =>
+  request<GameView>(`/api/v2/games/${encodeURIComponent(gameId)}/supply`, {
+    method: "POST",
+    headers: authorized(token),
+    body: JSON.stringify({ plan_id: planId, expected_revision: expectedRevision }),
+  });
+
+export const acknowledgeCheckpoint = (
+  gameId: string,
+  token: string,
+  checkpointId: string,
+  expectedRevision: number,
+) =>
+  request<GameView>(`/api/v2/games/${encodeURIComponent(gameId)}/acknowledgements`, {
+    method: "POST",
+    headers: authorized(token),
+    body: JSON.stringify({ checkpoint_id: checkpointId, expected_revision: expectedRevision }),
   });
 
 export const seatStorageKey = (gameId: string) => `stockpile.seatToken:${gameId}`;
@@ -84,10 +108,4 @@ export function claimFragmentToken(gameId: string): string | null {
     return candidate;
   }
   return sessionStorage.getItem(seatStorageKey(gameId));
-}
-
-export function seatLink(gameId: string, token: string): string {
-  const url = new URL(`/game/${encodeURIComponent(gameId)}`, window.location.origin);
-  url.hash = new URLSearchParams({ seat: token }).toString();
-  return url.toString();
 }

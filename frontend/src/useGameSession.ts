@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  acknowledgeCheckpoint,
   ApiError,
   getGameView,
   submitGameAction,
+  submitSupplyPlan,
 } from "./api";
 import type { GameView } from "./types";
 
@@ -55,18 +57,13 @@ export function useGameSession(gameId: string, token: string) {
     };
   }, [refresh]);
 
-  const act = useCallback(
-    async (actionId: number) => {
+  const submit = useCallback(
+    async (operation: (revision: number) => Promise<GameView>) => {
       if (!view || submitting) return;
       setSubmitting(true);
       setError(null);
       try {
-        const next = await submitGameAction(
-          gameId,
-          token,
-          actionId,
-          view.revision,
-        );
+        const next = await operation(view.revision);
         setView(next);
       } catch (cause) {
         if (cause instanceof ApiError && cause.status === 409) {
@@ -78,8 +75,21 @@ export function useGameSession(gameId: string, token: string) {
         setSubmitting(false);
       }
     },
-    [gameId, refresh, submitting, token, view],
+    [refresh, submitting, view],
   );
 
-  return { view, error, submitting, act, refresh };
+  const act = useCallback(
+    (actionId: number) => submit((revision) => submitGameAction(gameId, token, actionId, revision)),
+    [gameId, submit, token],
+  );
+  const supply = useCallback(
+    (planId: string) => submit((revision) => submitSupplyPlan(gameId, token, planId, revision)),
+    [gameId, submit, token],
+  );
+  const acknowledge = useCallback(
+    (checkpointId: string) => submit((revision) => acknowledgeCheckpoint(gameId, token, checkpointId, revision)),
+    [gameId, submit, token],
+  );
+
+  return { view, error, submitting, act, supply, acknowledge, refresh };
 }

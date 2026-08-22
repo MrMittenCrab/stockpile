@@ -1,38 +1,24 @@
-export type LiteOptionKey =
-  | "market_impact"
-  | "starting_share"
-  | "trading_fees"
-  | "dividends"
-  | "sell_order";
-
-export interface SetupResponse {
-  schema_version: "1.0";
-  mode: "lite";
-  defaults: { player_count: number; round_count: number };
-  player_limits: { minimum: number; maximum: number };
-  round_limits: { minimum: number; maximum: number };
-  options: Array<{
-    key: LiteOptionKey;
-    label: string;
-    description: string;
-    default: boolean;
-  }>;
-}
-
+export type LiteOptionKey = "market_impact" | "trading_fees" | "dividends" | "sell_order";
 export type LiteOptions = Record<LiteOptionKey, boolean>;
 
-export interface CreateGameRequest {
-  player_count: number;
-  player_names: string[];
-  round_count: number;
-  options: LiteOptions;
-  seed?: number;
+export interface SetupResponse {
+  schema_version: "2.0";
+  mode: "lite";
+  round_count: 6;
+  options: Array<{ key: LiteOptionKey; label: string; default: boolean }>;
 }
 
-export interface CreateGameResponse {
-  schema_version: "1.0";
-  game_id: string;
-  seats: Array<{ player_id: number; player_name: string; url: string }>;
+export interface CreateGameRequest { options: LiteOptions; seed?: number }
+export interface CreateGameResponse { schema_version: "2.0"; game_id: string; game_url: string }
+
+export type StockPatternName = "matrix" | "ledger" | "molecular" | "chevron" | "crosshatch" | "wave";
+export interface Company {
+  company_id: number;
+  symbol: string;
+  name: string;
+  display_name: string;
+  pattern: StockPatternName;
+  price_dollars_per_share: number;
 }
 
 export interface HiddenCard { visibility: "hidden" }
@@ -41,13 +27,9 @@ export interface StockCard {
   kind: "stock";
   company_id: number;
   company: string;
-  quantity: number;
+  shares_thousands: number;
 }
-export interface FeeCard {
-  visibility: "visible";
-  kind: "trading_fee";
-  amount: number;
-}
+export interface FeeCard { visibility: "visible"; kind: "trading_fee"; cash_effect_thousands: number }
 export interface ActionCard {
   visibility: "visible";
   kind: "action";
@@ -61,223 +43,155 @@ export interface InformationCard {
   company_id: number;
   company: string;
   forecast: number | "DIVIDEND";
+  cash_effect_thousands?: number | null;
 }
-export type VisibleCard = StockCard | FeeCard | ActionCard | InformationCard;
-export type Card = HiddenCard | VisibleCard;
+export type VisibleCard = StockCard | FeeCard | ActionCard;
+export type Card = HiddenCard | VisibleCard | InformationCard;
+export interface RememberedPileCard { visibility: "remembered"; face_down: true; card: VisibleCard }
+export type PileCard = HiddenCard | VisibleCard | RememberedPileCard;
 
-export interface Company {
-  company_id: number;
-  symbol: string;
-  name: string;
-  display_name: string;
-  pattern:
-    | "matrix"
-    | "ledger"
-    | "molecular"
-    | "chevron"
-    | "crosshatch"
-    | "wave";
-  price: number;
-  color: string;
-}
-
-export type BidMarkerStatus =
-  | "available"
-  | "placed"
-  | "outbid"
-  | "rebidding"
-  | "locked";
+export type BidMarkerStatus = "available" | "placed" | "outbid" | "rebidding" | "locked";
 export interface BidMarker {
   player_id: number;
   marker_index: number;
   status: BidMarkerStatus;
   stockpile_id: number | null;
-  bid: number | null;
+  bid_thousands: number | null;
 }
-
 export interface Stockpile {
   stockpile_id: number;
-  visible_cards: VisibleCard[];
-  hidden_cards: HiddenCard[];
-  marker: BidMarker | null;
-  bid: number | null;
+  cards_bottom_to_top: PileCard[];
+  bid: { player_id: number; amount_thousands: number } | null;
   locked: boolean;
   purchaser_id: number | null;
 }
-
-export interface PublicPlayer {
+export interface PublicPlayerBase {
   player_id: number;
   name: string;
-  cash: number;
+  cash_thousands: number;
+  cash_delta_thousands: number | null;
   active: boolean;
   status: string;
-  fee_debts: number[];
   bid_markers: BidMarker[];
+}
+export interface HumanPublicPlayer extends PublicPlayerBase {
+  role: "human";
+  position_value_thousands: number;
+  position_delta_thousands: number | null;
+}
+export interface ComputerPublicPlayer extends PublicPlayerBase { role: "computer" }
+export type PublicPlayer = HumanPublicPlayer | ComputerPublicPlayer;
+export interface Holding {
+  company_id: number;
+  company: string;
+  shares_thousands: number;
+  price_dollars_per_share: number;
+  market_value_thousands: number;
+}
+export interface MarketInformationSlot {
+  visibility: "private" | "public" | "hidden";
+  card: InformationCard | HiddenCard;
 }
 
 export interface SalePreview {
   company_id: number;
   company: string;
-  quantity: number;
-  unit_price: number;
-  gross_value: number;
-  resulting_regular: number;
-  resulting_split: number;
-  resulting_represented: number;
+  shares_thousands: number;
+  price_dollars_per_share: number;
+  gross_value_thousands: number;
+  resulting_shares_thousands: number;
 }
-
-export type ActionControl =
-  | "card"
-  | "stockpile"
-  | "bid"
-  | "action_card"
-  | "company"
-  | "sell"
-  | "dividend"
-  | "continue"
-  | "generic";
-
+export type ActionControl = "stockpile" | "bid" | "action_card" | "company" | "sell" | "dividend" | "continue" | "generic";
 export interface LegalAction {
   action_id: number;
   control: ActionControl;
   label: string;
   target_id: string | null;
-  amount: number | null;
-  placement_visibility: "face_up" | "face_down" | null;
+  amount_thousands: number | null;
+  direction: "up" | "down" | null;
   sale_preview: SalePreview | null;
 }
-
-export type PendingKind =
-  | "supply_card"
-  | "supply_face_up_pile"
-  | "supply_face_down_pile"
-  | "bid_pile"
-  | "bid_amount"
-  | "action_card"
-  | "action_company"
-  | "sell"
-  | "dividend_claim"
-  | "acknowledge"
-  | "waiting"
-  | "private_selling"
-  | "terminal"
-  | "generic";
-
+export type PendingKind = "supply" | "bid_pile" | "bid_amount" | "action_card" | "action_company" | "sell" | "dividend_claim" | "acknowledge" | "waiting" | "private_selling" | "terminal" | "generic";
 export interface PendingDecision {
   kind: PendingKind;
   prompt: string;
-  selected_card_index: number | null;
   selected_stockpile_id: number | null;
   selected_action_effect: string | null;
   company_id: number | null;
-  private_progress: number | null;
-  private_total: number | null;
 }
 
-export interface Holding {
-  company_id: number;
-  company: string;
-  regular: number;
-  split: number;
-  represented: number;
-  price: number;
+export interface SupplyPlacement {
+  card_ref: string;
+  stockpile_id: number;
+  visibility: "face_up" | "face_down";
 }
-
-export interface ChatMessage {
-  message_id: number;
-  player_id: number;
-  player_name: string;
-  message: string;
-  created_at: string;
+export interface SupplyBatch {
+  cards: Array<{ card_ref: string; card: VisibleCard }>;
+  plans: Array<{ plan_id: string; placements: SupplyPlacement[] }>;
+}
+export interface PresentationCheckpoint {
+  checkpoint_id: string;
+  kind: "demand_result" | "round_result";
+  round: number;
+}
+export interface MarketEvent {
+  event_id: number;
+  event_type: string;
+  cause: string | null;
+  round: number;
+  company_id: number | null;
+  prior_price_dollars_per_share: number | null;
+  price_delta: number | null;
+  resulting_price_dollars_per_share: number | null;
+  forecast: number | "DIVIDEND" | null;
+  cash_effect_thousands: number | null;
+  direction: "up" | "down" | null;
+}
+export interface TerminalResult {
+  players: Array<{
+    player_id: number;
+    player_name: string;
+    cash_before_liquidation_thousands: number;
+    liquidation_value_thousands: number;
+    final_cash_thousands: number;
+    rank: number;
+    winner: boolean;
+    liquidation: Array<{
+      company_id: number;
+      company: string;
+      shares_thousands: number;
+      price_dollars_per_share: number;
+      value_thousands: number;
+    }>;
+  }>;
+  winner_ids: number[];
 }
 
 export interface GameView {
-  schema_version: "1.0";
+  schema_version: "2.0";
   game_id: string;
   revision: number;
-  configuration: {
-    mode: "lite";
-    player_count: number;
-    round_count: number;
-    options: LiteOptions;
-  };
-  capabilities: {
-    market_impact: boolean;
-    starting_share: boolean;
-    trading_fees: boolean;
-    dividends: boolean;
-    sequential_selling: boolean;
-    stock_splits: false;
-    majority_bonus: false;
-    price_ceiling: null;
-  };
+  configuration: { mode: "lite"; player_count: 2; round_count: 6; options: LiteOptions };
   round: number;
   total_rounds: number;
   phase: string;
   phase_step: string;
-  viewer: { player_id: number; name: string };
+  viewer: { player_id: 0; name: "YOU" };
   active_player_id: number | null;
   companies: Company[];
   stockpiles: Stockpile[];
   players: PublicPlayer[];
   private: {
-    hand: VisibleCard[];
-    market_information: Array<{
-      visibility: "private" | "public" | "hidden";
-      source: "dealt" | "viewed" | "revealed" | "unknown";
-      card: InformationCard | HiddenCard;
-    }>;
+    market_information: MarketInformationSlot[];
     holdings: Holding[];
-    known_pile_cards: Array<{ stockpile_id: number; card: VisibleCard }>;
     available_action_cards: ActionCard[];
   };
   pending_decision: PendingDecision;
   legal_actions: LegalAction[];
-  public_history: Array<{
-    sequence: number;
-    phase: string;
-    actor_id: number | null;
-    summary: string;
-    sale_totals: Record<string, Record<string, number>> | null;
-  }>;
-  recent_events: Array<{
-    event_id: number;
-    event_type: string;
-    cause: string | null;
-    round: number;
-    description: string;
-    company_id: number | null;
-    company: string | null;
-    prior_price: number | null;
-    requested_delta: number | null;
-    actual_delta: number | null;
-    resulting_price: number | null;
-    forecast: number | "DIVIDEND" | null;
-    effect: string | null;
-    actor_id: number | null;
-  }>;
-  chat: ChatMessage[];
-  terminal_results: null | {
-    players: Array<{
-      player_id: number;
-      player_name: string;
-      cash_before_liquidation: number;
-      liquidation_value: number;
-      final_cash: number;
-      rank: number;
-      winner: boolean;
-      liquidation: Array<{
-        company_id: number;
-        company: string;
-        represented_shares: number;
-        unit_price: number;
-        value: number;
-      }>;
-    }>;
-    winner_ids: number[];
-  };
+  supply_batch: SupplyBatch | null;
+  checkpoint: PresentationCheckpoint | null;
+  recent_events: MarketEvent[];
+  terminal_results: TerminalResult | null;
 }
 
-export interface ApiFailure {
-  error: { code: string; message: string };
-}
+export interface ApiFailure { error: { code: string; message: string } }

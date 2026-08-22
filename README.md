@@ -31,9 +31,11 @@ price tracks are not Lite rules; Lite prices can rise above 10 normally.
 
 ## Browser play
 
-The local browser interface supports complete Stockpile Lite games for two to
-five human players. Each player uses a separate fixed-seat browser tab; game
-sessions and chat exist only in memory and are cleared when the backend stops.
+The local browser interface is a complete six-round Stockpile Lite game between
+`YOU` and a deliberately simple `COMPUTER` opponent. The computer chooses
+uniformly from Python's current legal actions; it is only a replaceable local
+policy placeholder, not Deep CFR inference. Games exist only in memory and are
+cleared when the backend stops.
 
 Install the web and frontend dependencies once:
 
@@ -50,14 +52,17 @@ Start the backend and frontend in separate terminals:
 npm --prefix frontend run dev
 ```
 
-Open <http://127.0.0.1:5173>, configure and create a game, then open each
-generated seat link in its own tab or window. The browser client submits only
-opaque actions offered by Python; it does not implement game rules or expose
-other seats' private information.
+Open <http://127.0.0.1:5173>, choose from Dividend, Fees, Impact, and Sell Order,
+then press `START`. Starting Shares remain available through the engine and
+legacy API but are intentionally fixed off in this browser product. The browser
+moves directly into the human seat. The client submits only opaque actions and
+complete Supply plans offered by Python; it does not implement game rules or
+receive the computer's private portfolio.
 
-This interface intentionally has no accounts, matchmaking, bots, hot-seat
-mode, WebSockets, persistent storage, production deployment, or Deep CFR
-recommendations.
+This interface intentionally has no accounts, matchmaking, human multiplayer,
+hot-seat mode, WebSockets, persistent storage, production deployment, or Deep
+CFR recommendations. The legacy local multi-seat HTTP API remains available
+for compatibility but is not used by the browser product.
 
 ## Deep CFR
 
@@ -123,6 +128,6 @@ npm --prefix frontend run e2e
 - `stockpile/training/` — Deep CFR encoding, sampling, models, trainer, policy,
   and evaluation.
 - `stockpile/web/` — local FastAPI sessions and privacy-safe browser views.
-- `frontend/` — Vite React TypeScript fixed-seat browser client.
+- `frontend/` — Vite React TypeScript `YOU`-versus-`COMPUTER` browser client.
 - `stockpile/tests/` — engine, interface, CLI, complexity, and training tests.
 - `stockpile/docs/` — bundled Stockpile rules and reference documents.

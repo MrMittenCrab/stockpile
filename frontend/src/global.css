@@ -2,26 +2,21 @@
   font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 12px;
   font-weight: 400;
-  color: #111214;
-  background: #f2f3f4;
+  color: #111111;
+  background: #ffffff;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
-  --stock-blue: #002fa7;
-  --base: #f2f3f4;
+  --blue: #002fa7;
+  --black: #111111;
+  --grey: #70747a;
+  --green: #14733d;
+  --red: #b21f2d;
   --white: #ffffff;
-  --ink: #111214;
-  --muted: #70747a;
-  --green: #1f7a45;
-  --red: #b4232e;
-  --ochre: #9a7018;
-  --hidden: #34383d;
   --primary-size: 28px;
   --secondary-size: 12px;
 }
 
-* {
-  box-sizing: border-box;
-}
+* { box-sizing: border-box; }
 
 html,
 body,
@@ -31,10 +26,7 @@ body,
   margin: 0;
 }
 
-body {
-  min-height: 100vh;
-  background: var(--base);
-}
+body { min-height: 100vh; background: var(--white); }
 
 body,
 button,
@@ -54,18 +46,11 @@ h4,
 h5,
 h6,
 strong,
-b {
-  font-weight: 400;
-}
+b { font-weight: 400; }
 
 button,
-a {
-  -webkit-tap-highlight-color: transparent;
-}
-
-a {
-  color: inherit;
-}
+a { -webkit-tap-highlight-color: transparent; }
+a { color: inherit; }
 
 .missing-seat {
   display: grid;
@@ -74,43 +59,14 @@ a {
   justify-items: start;
   gap: 20px;
   padding: 32px;
-  background: var(--base);
-}
-
-.missing-seat h1,
-.missing-seat p {
-  margin: 0;
-}
-
-.missing-seat h1 {
-  color: var(--stock-blue);
-  font-size: var(--primary-size);
-  letter-spacing: .08em;
-}
-
-.missing-seat p,
-.missing-seat a {
-  font-size: var(--secondary-size);
-  letter-spacing: .08em;
-}
-
-.missing-seat a {
-  color: var(--white);
-  background: var(--stock-blue);
-  padding: 14px 22px;
-  text-decoration: none;
-}
-
-.missing-seat a:focus-visible {
-  outline: 2px solid var(--stock-blue);
-  outline-offset: 3px;
+  color: var(--black);
+  background: var(--white);
 }
 
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
-    scroll-behavior: auto !important;
     transition-duration: .01ms !important;
     animation-duration: .01ms !important;
     animation-iteration-count: 1 !important;

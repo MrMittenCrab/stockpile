@@ -1,17 +1,18 @@
 .game {
   min-height: 100vh;
-  background: var(--base, #f2f3f4);
-  color: var(--ink, #111214);
-  font-size: var(--secondary-size, 12px);
+  color: var(--black);
+  background: var(--white);
+  font-size: var(--secondary-size);
   font-weight: 400;
 }
 
-.game *, .game *::before, .game *::after { box-sizing: border-box; font-weight: 400; }
+.game *,
+.game *::before,
+.game *::after { box-sizing: border-box; font-weight: 400; }
 
 .workstation {
-  height: 100vh;
   display: grid;
-  grid-template-columns: minmax(180px, 19fr) minmax(480px, 58fr) minmax(180px, 23fr);
+  grid-template-columns: minmax(180px, 20fr) minmax(500px, 58fr) minmax(190px, 22fr);
   grid-template-rows: 42px minmax(0, .9fr) minmax(0, 1fr) minmax(0, 1fr) clamp(118px, 18vh, 160px);
   grid-template-areas:
     "status status status"
@@ -19,13 +20,13 @@
     "private stockpiles portfolio"
     "public stockpiles players"
     "dock dock dock";
-  gap: 2px;
-  padding: 2px;
-  background: var(--base, #f2f3f4);
+  gap: 1px;
+  width: 100%;
+  height: 100vh;
+  background: var(--black);
 }
 
-.module { min-width: 0; min-height: 0; background: var(--white, #fff); }
-.moduleLabel { display: block; color: var(--muted, #6c7075); font-size: var(--secondary-size, 12px); }
+.module { min-width: 0; min-height: 0; background: var(--white); }
 
 .status {
   grid-area: status;
@@ -38,130 +39,253 @@
 .status span:nth-child(2) { justify-self: center; }
 .status span:last-child { justify-self: end; }
 
-.market { grid-area: market; display: grid; grid-template-rows: auto 1fr; gap: 10px; padding: 18px; overflow: hidden; }
-.marketList { min-width: 0; display: grid; grid-template-columns: 1fr; gap: 2px; }
-.marketCompany { min-width: 0; display: grid; grid-template-columns: 18px minmax(0, 1fr) auto auto; align-items: center; gap: 6px; line-height: 1; }
-.marketCompany .stockPattern { width: 18px; height: 13px; }
-.marketName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; letter-spacing: .03em; }
-.marketPrice { color: var(--ink, #111214); font-size: var(--secondary-size, 12px); font-variant-numeric: tabular-nums; }
-.priceUp { color: var(--green, #1f7a45); }
-.priceDown { color: var(--red, #b4232e); }
-.companyTarget { width: 100%; padding: 0; border: 0; background: transparent; text-align: initial; }
-.companyTarget:hover:not(:disabled), .companyTarget:focus-visible { background: var(--base, #f2f3f4); }
+.market {
+  grid-area: market;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 14px;
+  padding: 18px;
+  overflow: hidden;
+}
+.marketList { display: grid; align-content: start; gap: 8px; }
+.marketCompany {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.marketCompany .stockPattern { width: 20px; height: 14px; }
+.marketName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.marketPrice { font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 .privateInformation { grid-area: private; }
 .publicInformation { grid-area: public; }
-.privateInformation, .publicInformation, .portfolio, .players { padding: 18px; overflow: auto; }
-.informationList { display: grid; gap: 18px; margin-top: 18px; }
-.informationPair { display: flex; align-items: center; gap: 8px; }
-.knownCards { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 22px; }
-.knownCards > div { display: grid; grid-template-columns: auto auto; align-items: center; gap: 7px; }
+.privateInformation,
+.publicInformation,
+.portfolio,
+.players { padding: 18px; overflow: auto; }
+.informationList { display: grid; gap: 14px; margin-top: 16px; }
+.informationPair { display: flex; align-items: center; gap: 7px; }
 
 .stockpileField { grid-area: stockpiles; overflow: auto; padding: 20px; }
-.stockpileGrid { min-height: 100%; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); grid-auto-rows: minmax(180px, 1fr); gap: 26px; align-content: center; }
-.fourPiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.stockpile { min-width: 0; min-height: 170px; display: grid; place-content: center; justify-items: center; gap: 12px; }
-.stockpileSelected { background: #e8eaec; }
-.pileSelector { width: 100%; height: 100%; padding: 10px; border: 0; background: transparent; color: inherit; }
-.pileSelector:hover:not(:disabled), .pileSelector.selected { background: #e8eaec; }
-.pileSelector.selected .stack { transform: translateY(-2px); }
-.bid { min-height: 1em; letter-spacing: .06em; }
+.stockpileGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: minmax(210px, 1fr);
+  align-content: center;
+  gap: 22px;
+  min-height: 100%;
+}
+.stockpile {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  min-height: 200px;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+}
+.pileTarget {
+  appearance: none;
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  padding: 0;
+  border: 0;
+  color: var(--black);
+  background: transparent;
+  cursor: pointer;
+}
+.pileTarget::after {
+  content: "";
+  position: absolute;
+  right: 30%;
+  bottom: 2px;
+  left: 30%;
+  height: 1px;
+  background: transparent;
+}
+.pileTarget:hover::after,
+.pileTarget[aria-pressed="true"]::after { background: var(--black); }
+.pileTarget:focus-visible { outline: 1px solid var(--black); outline-offset: 2px; }
+.pileTarget:disabled { cursor: default; }
+.stackInspect {
+  appearance: none;
+  position: relative;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  color: var(--black);
+  background: transparent;
+  cursor: pointer;
+}
+.stackInspect:focus-visible { outline: 1px solid var(--black); outline-offset: 3px; }
+.bid { position: relative; z-index: 2; font-variant-numeric: tabular-nums; letter-spacing: .06em; pointer-events: none; }
 
 .stack {
   --stack-count: 1;
   position: relative;
-  width: calc(clamp(112px, 10vw, 154px) + (var(--stack-count) - 1) * 18px);
-  height: calc(clamp(146px, 13vw, 200px) + (var(--stack-count) - 1) * 5px);
+  display: block;
+  width: calc(clamp(104px, 10vw, 150px) + (var(--stack-count) - 1) * 18px);
+  height: calc(clamp(139px, 13.333vw, 200px) + (var(--stack-count) - 1) * 4px);
 }
-.stackLayer { position: absolute; top: calc(var(--stack-index) * 5px); left: calc(var(--stack-index) * 18px); }
-
-.card {
-  position: relative;
-  flex: none;
+.stackLayer {
+  --stack-index: 0;
+  position: absolute;
+  top: calc(var(--stack-index) * 4px);
+  left: calc(var(--stack-index) * 18px);
+}
+.stackEdge {
+  position: absolute;
+  z-index: 1;
+  top: 5px;
+  left: 3px;
   display: grid;
+  width: 12px;
+  height: 14px;
   place-items: center;
   overflow: hidden;
-  border: 1px solid #cfd2d5;
-  background: var(--white, #fff);
-  color: var(--ink, #111214);
+  background: var(--white);
+  pointer-events: none;
 }
-.card_stockpile { width: clamp(112px, 10vw, 154px); height: clamp(146px, 13vw, 200px); }
-.card_active { width: 88px; height: 114px; }
-.card_portfolio { width: 58px; height: 76px; }
-.card_information { width: 58px; height: 76px; }
-.stockCard { color: var(--stock-blue, #002fa7); }
-.stockPattern { width: 82%; height: 72%; fill: currentColor; color: var(--stock-blue, #002fa7); }
-.cardValue { position: absolute; right: 7px; bottom: 5px; color: var(--ink, #111214); font-size: var(--primary-size, 28px); font-variant-numeric: tabular-nums; }
-.card_portfolio .cardValue, .card_information .cardValue { right: 4px; bottom: 2px; font-size: var(--secondary-size, 12px); }
-.cardSignal { font-size: var(--primary-size, 28px); }
-.upCard { color: var(--green, #1f7a45); }
-.downCard { color: var(--red, #b4232e); }
-.cashCard { color: var(--ochre, #987019); }
-.neutralCard { color: var(--ink, #111214); }
-.hiddenCard { border-color: var(--hidden, #34383d); background: var(--hidden, #34383d); }
-.hiddenEdge { position: absolute; top: 0; right: 0; width: 18px; height: 100%; background: #5f646a; }
-.edgePattern { position: absolute; top: 0; right: 0; width: 18px; height: 100%; background: var(--white, #fff); }
-.edgeSignal { position: absolute; top: 0; right: 0; width: 18px; height: 100%; display: grid; place-items: center; overflow: hidden; background: var(--white, #fff); font-size: var(--secondary-size, 12px); }
+.stackEdge .stockPattern { width: 12px; height: 12px; }
+.hiddenStackEdge {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  bottom: 0;
+  left: 16px;
+  width: 1px;
+  background: var(--white);
+  pointer-events: none;
+}
+.stackExpanded {
+  display: grid;
+  grid-template-columns: repeat(2, 104px);
+  width: auto;
+  height: auto;
+  gap: 6px;
+}
+.stackExpanded .stackLayer { position: relative; top: auto; left: auto; }
+.stackExpanded [data-card-scale="stockpile"] { width: 104px; }
+
+.stockCard { color: var(--blue); }
+.stockPattern { width: 82%; height: 72%; color: var(--blue); fill: currentColor; }
+.cardValue {
+  position: absolute;
+  right: 6px;
+  bottom: 4px;
+  color: var(--black);
+  font-size: var(--primary-size);
+  font-variant-numeric: tabular-nums;
+}
+[data-card-scale="portfolio"] .cardValue,
+[data-card-scale="information"] .cardValue { right: 3px; bottom: 2px; font-size: var(--secondary-size); }
+.cardSignal { font-size: var(--primary-size); font-variant-numeric: tabular-nums; }
+.positive { color: var(--green); }
+.negative { color: var(--red); }
+.neutral { color: var(--black); }
+.hiddenCard { border-color: var(--black); background: var(--black); }
+.faceDownFlag {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  padding: 2px;
+  color: var(--white);
+  background: var(--black);
+  font-size: var(--secondary-size);
+  letter-spacing: .04em;
+}
 
 .portfolio { grid-area: portfolio; }
-.portfolioCards { display: grid; grid-template-columns: repeat(auto-fit, 58px); gap: 12px; margin-top: 18px; }
+.portfolioCards { display: grid; grid-template-columns: repeat(auto-fit, 54px); gap: 10px; margin-top: 16px; }
 
 .players { grid-area: players; }
-.playerList { display: grid; gap: 14px; margin-top: 18px; }
-.playerList > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; }
-.playerList span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.playerList span:last-child { font-variant-numeric: tabular-nums; }
+.playerList { display: grid; gap: 22px; margin-top: 18px; }
+.player { display: grid; gap: 8px; }
+.metric { display: grid; grid-template-columns: minmax(54px, auto) auto auto; justify-content: start; gap: 10px; font-variant-numeric: tabular-nums; }
 
-.actionDock { grid-area: dock; display: grid; grid-template-columns: minmax(150px, 20%) 1fr; gap: 20px; align-items: center; padding: 14px 22px; overflow: hidden; }
+.actionDock {
+  grid-area: dock;
+  display: grid;
+  grid-template-columns: minmax(140px, 18%) 1fr;
+  align-items: center;
+  gap: 20px;
+  padding: 14px 22px;
+  overflow: hidden;
+}
 .dockHeading { display: grid; gap: 10px; }
-.dockContents { min-width: 0; display: flex; align-items: center; gap: 14px; overflow-x: auto; padding: 2px; }
-.selectable { color: inherit; font: inherit; cursor: pointer; }
-.selectable:disabled { cursor: default; opacity: .45; }
-.selectable:focus-visible, .actionControl:focus-visible { outline: 2px solid var(--ink, #111214); outline-offset: 2px; }
-.selected { background: #e8eaec; }
-.cardAction { flex: none; padding: 0; border: 0; background: transparent; }
-.actionControl, .saleAction { min-width: 86px; min-height: 42px; display: grid; place-items: center; padding: 8px 14px; border: 1px solid var(--ink, #111214); background: var(--white, #fff); color: var(--ink, #111214); text-decoration: none; }
-.actionControl:hover:not(:disabled), .saleAction:hover:not(:disabled) { background: var(--ink, #111214); color: var(--white, #fff); }
-.saleAction { grid-template-columns: auto auto; gap: 10px; }
+.dockContents { display: flex; min-width: 0; align-items: center; gap: 12px; overflow-x: auto; padding: 3px; }
+.selectable { appearance: none; color: inherit; font: inherit; cursor: pointer; }
+.selectable:disabled { cursor: default; }
+.selectable:focus-visible { outline: 1px solid var(--black); outline-offset: 2px; }
+.selected { outline: 2px solid var(--black); outline-offset: 2px; }
+.objectControl { width: 100%; padding: 0; border: 0; background: var(--white); text-align: initial; }
+.cardAction { display: grid; flex: none; justify-items: center; gap: 6px; padding: 0; border: 0; background: var(--white); }
+.assignment { color: var(--black); font-size: var(--secondary-size); }
 
-.terminal { display: block; }
-.rankings { display: grid; gap: 2px; margin-top: 20px; background: var(--base, #f2f3f4); }
-.ranking { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto auto; gap: 16px; padding: 14px; background: var(--white, #fff); }
-.liquidation { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 14px; color: var(--muted, #6c7075); }
+.workstationTerminal {
+  grid-template-areas:
+    "status status status"
+    "market terminal terminal"
+    "private terminal terminal"
+    "public terminal terminal"
+    "dock dock dock";
+}
+.terminal { grid-area: terminal; display: block; }
+.rankings { display: grid; gap: 20px; margin-top: 20px; }
+.ranking { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto auto; gap: 14px; }
+.liquidation { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 14px; }
 .liquidation > span { display: inline-flex; align-items: center; gap: 5px; }
 .liquidation .stockPattern { width: 20px; height: 14px; }
 
-.errorBanner { position: fixed; z-index: 10; top: 8px; left: 50%; transform: translateX(-50%); padding: 10px 16px; background: var(--ink, #111214); color: var(--white, #fff); }
-.centerState { min-height: 100vh; display: grid; place-content: center; justify-items: center; gap: 14px; background: var(--base, #f2f3f4); color: var(--ink, #111214); font-size: var(--secondary-size, 12px); }
-.centerState a { color: var(--stock-blue, #002fa7); }
+.errorBanner { position: fixed; z-index: 10; top: 8px; left: 50%; transform: translateX(-50%); padding: 10px 16px; color: var(--white); background: var(--black); }
+.centerState { display: grid; min-height: 100vh; place-content: center; justify-items: center; gap: 14px; color: var(--black); background: var(--white); font-size: var(--secondary-size); }
 
 @media (max-width: 1100px) {
-  .workstation { grid-template-columns: minmax(155px, 18fr) minmax(430px, 57fr) minmax(170px, 25fr); }
-  .market { padding: 12px; }
-  .marketCompany { grid-template-columns: 14px minmax(0, 1fr) auto; gap: 5px; }
-  .marketCompany .stockPattern { width: 14px; height: 10px; }
-  .marketCompany .priceUp, .marketCompany .priceDown { grid-column: 2 / -1; justify-self: end; }
+  .workstation { grid-template-columns: minmax(160px, 18fr) minmax(440px, 58fr) minmax(180px, 24fr); }
+  .market,
+  .privateInformation,
+  .publicInformation,
+  .portfolio,
+  .players { padding: 12px; }
+  .marketCompany { grid-template-columns: 15px minmax(0, 1fr) auto; gap: 5px; }
+  .marketCompany .stockPattern { width: 15px; height: 11px; }
+  .marketCompany .positive,
+  .marketCompany .negative { grid-column: 2 / -1; justify-self: end; }
 }
 
 @media (max-width: 899px) {
   .workstation {
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 42px auto minmax(560px, 1fr) minmax(170px, auto) minmax(170px, auto) minmax(120px, auto);
+    grid-template-areas: "status status" "market market" "stockpiles stockpiles" "private portfolio" "public players" "dock dock";
     height: auto;
     min-height: 100vh;
-    grid-template-columns: 1fr 1fr;
-    grid-template-rows: 42px auto minmax(520px, 1fr) minmax(170px, auto) minmax(170px, auto) minmax(120px, auto);
-    grid-template-areas: "status status" "market market" "stockpiles stockpiles" "private portfolio" "public players" "dock dock";
   }
   .marketList { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .market { padding: 14px; }
-  .marketCompany { grid-template-columns: 24px minmax(0, 1fr) auto auto; }
   .stockpileField { overflow: visible; }
+  .workstationTerminal {
+    grid-template-rows: 42px auto minmax(500px, 1fr) minmax(170px, auto) minmax(170px, auto) minmax(120px, auto);
+    grid-template-areas: "status status" "market market" "terminal terminal" "private private" "public public" "dock dock";
+  }
 }
 
 @media (max-width: 560px) {
-  .workstation { grid-template-columns: 1fr; grid-template-rows: 42px auto minmax(700px, auto) auto auto auto auto auto; grid-template-areas: "status" "market" "stockpiles" "private" "public" "portfolio" "players" "dock"; }
+  .workstation {
+    grid-template-columns: 1fr;
+    grid-template-rows: 42px auto minmax(720px, auto) auto auto auto auto auto;
+    grid-template-areas: "status" "market" "stockpiles" "private" "public" "portfolio" "players" "dock";
+  }
   .status { padding-inline: 10px; }
-  .market { grid-template-columns: 1fr; gap: 10px; padding-inline: 10px; }
   .marketList { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .fourPiles { grid-template-columns: 1fr; }
+  .stockpileGrid { grid-template-columns: 1fr; }
   .actionDock { grid-template-columns: 1fr; }
+  .workstationTerminal {
+    grid-template-rows: 42px auto minmax(500px, auto) auto auto auto;
+    grid-template-areas: "status" "market" "terminal" "private" "public" "dock";
+  }
 }

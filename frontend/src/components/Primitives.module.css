@@ -1,0 +1,55 @@
+.button {
+  appearance: none;
+  min-width: 88px;
+  height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--black);
+  color: var(--black);
+  background: var(--white);
+  font: inherit;
+  font-size: var(--secondary-size);
+  font-weight: 400;
+  letter-spacing: .08em;
+  cursor: pointer;
+}
+
+.button[aria-pressed="true"],
+.button:hover:not(:disabled) {
+  color: var(--white);
+  background: var(--black);
+}
+
+.button:disabled {
+  cursor: default;
+}
+
+.button:focus-visible {
+  outline: 1px solid var(--black);
+  outline-offset: 2px;
+}
+
+.sectionLabel {
+  display: block;
+  margin: 0;
+  color: var(--grey);
+  font-size: var(--secondary-size);
+  font-weight: 400;
+  letter-spacing: .14em;
+}
+
+.card {
+  position: relative;
+  flex: none;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  aspect-ratio: 3 / 4;
+  border: 1px solid var(--black);
+  color: var(--black);
+  background: var(--white);
+}
+
+.stockpile { width: clamp(104px, 10vw, 150px); }
+.active { width: 84px; }
+.portfolio,
+.information { width: 54px; }

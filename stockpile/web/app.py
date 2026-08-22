@@ -25,6 +25,17 @@ from .schemas import (
     SetupResponse,
 )
 from .sessions import SessionError, SessionStore
+from .v2_schemas import (
+    AcknowledgementRequestV2,
+    ActionRequestV2,
+    CreateGameRequestV2,
+    CreateGameResponseV2,
+    GameViewV2,
+    OptionDescriptorV2,
+    SetupResponseV2,
+    SupplyRequestV2,
+)
+from .v2_sessions import V2SessionStore
 
 
 def _error_payload(code: str, message: str) -> dict[str, Any]:
@@ -42,18 +53,24 @@ def _bearer_token(authorization: str | None) -> str | None:
     return token.strip()
 
 
-def create_app(store: SessionStore | None = None) -> FastAPI:
+def create_app(
+    store: SessionStore | None = None,
+    *,
+    store_v2: V2SessionStore | None = None,
+) -> FastAPI:
     """Create an isolated application; tests may inject a fresh session store."""
 
     sessions = store or SessionStore()
+    browser_sessions = store_v2 or V2SessionStore()
     app = FastAPI(
         title="Stockpile Lite local play API",
-        version="1.0.0",
+        version="2.0.0",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
     )
     app.state.session_store = sessions
+    app.state.v2_session_store = browser_sessions
 
     @app.middleware("http")
     async def prevent_storage(request: Request, call_next):  # type: ignore[no-untyped-def]
@@ -189,6 +206,87 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
         )
         return ChatResponseV1(
             chat_message=sessions.add_chat(session, player_id, request.message)
+        )
+
+    @app.get("/api/v2/setup", response_model=SetupResponseV2)
+    def get_setup_v2() -> SetupResponseV2:
+        defaults = interface.resolve_configuration(
+            interface.ConfigurationMode.LITE,
+            player_count=2,
+            round_count=6,
+        )
+        return SetupResponseV2(
+            options=[
+                OptionDescriptorV2(
+                    key="dividends", label="DIVIDEND", default=defaults.dividend
+                ),
+                OptionDescriptorV2(
+                    key="trading_fees", label="FEES", default=defaults.fees
+                ),
+                OptionDescriptorV2(
+                    key="market_impact", label="IMPACT", default=defaults.impact
+                ),
+                OptionDescriptorV2(
+                    key="sell_order", label="SELL ORDER", default=defaults.sell_order
+                ),
+            ]
+        )
+
+    @app.post(
+        "/api/v2/games",
+        response_model=CreateGameResponseV2,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def create_game_v2(request: CreateGameRequestV2) -> CreateGameResponseV2:
+        _session, response = browser_sessions.create(request)
+        return response
+
+    @app.get("/api/v2/games/{game_id}/view", response_model=GameViewV2)
+    def get_view_v2(
+        game_id: str, authorization: str | None = Header(default=None)
+    ) -> GameViewV2:
+        session = browser_sessions.authenticate(game_id, _bearer_token(authorization))
+        return browser_sessions.view(session)
+
+    @app.post("/api/v2/games/{game_id}/actions", response_model=GameViewV2)
+    def submit_action_v2(
+        game_id: str,
+        request: ActionRequestV2,
+        authorization: str | None = Header(default=None),
+    ) -> GameViewV2:
+        session = browser_sessions.authenticate(game_id, _bearer_token(authorization))
+        return browser_sessions.act(
+            session,
+            action_id=request.action_id,
+            expected_revision=request.expected_revision,
+        )
+
+    @app.post("/api/v2/games/{game_id}/supply", response_model=GameViewV2)
+    def submit_supply_v2(
+        game_id: str,
+        request: SupplyRequestV2,
+        authorization: str | None = Header(default=None),
+    ) -> GameViewV2:
+        session = browser_sessions.authenticate(game_id, _bearer_token(authorization))
+        return browser_sessions.supply(
+            session,
+            plan_id=request.plan_id,
+            expected_revision=request.expected_revision,
+        )
+
+    @app.post(
+        "/api/v2/games/{game_id}/acknowledgements", response_model=GameViewV2
+    )
+    def acknowledge_v2(
+        game_id: str,
+        request: AcknowledgementRequestV2,
+        authorization: str | None = Header(default=None),
+    ) -> GameViewV2:
+        session = browser_sessions.authenticate(game_id, _bearer_token(authorization))
+        return browser_sessions.acknowledge(
+            session,
+            checkpoint_id=request.checkpoint_id,
+            expected_revision=request.expected_revision,
         )
 
     return app

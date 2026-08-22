@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { claimFragmentToken } from "./api";
 import { GamePage } from "./components/GamePage";
+import { TextButton } from "./components/Primitives";
 import { SetupPage } from "./SetupPage";
 import "./global.css";
 
@@ -10,7 +11,7 @@ export function App() {
   const token = useMemo(() => gameId ? claimFragmentToken(gameId) : null, [gameId]);
   if (!gameId) return <SetupPage />;
   if (!token) {
-    return <main className="missing-seat"><h1>NO SEAT</h1><p>Open a seat link.</p><a href="/">HOME</a></main>;
+    return <main className="missing-seat"><span>GAME UNAVAILABLE</span><TextButton onClick={() => window.location.assign("/")}>NEW GAME</TextButton></main>;
   }
   return <GamePage gameId={gameId} token={token} />;
 }

@@ -17,7 +17,7 @@ export default defineConfig({
       command:
         ".venv/bin/python -m stockpile play --mode lite --host 127.0.0.1 --port 8000",
       cwd: "..",
-      url: "http://127.0.0.1:8000/api/v1/setup",
+      url: "http://127.0.0.1:8000/api/v2/setup",
       reuseExistingServer: true,
       timeout: 30_000,
     },
