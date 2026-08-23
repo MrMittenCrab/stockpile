@@ -1,6 +1,5 @@
 import {
   useEffect,
-  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -12,7 +11,6 @@ import type {
   Company,
   GameView,
   LegalAction,
-  MarketEvent,
   PileCard,
   Stockpile,
   SupplyBatch,
@@ -88,7 +86,6 @@ function Status({ view }: { view: GameView }) {
 
 function Market({
   view,
-  movements,
   selectedActionId,
   selectedPlanId,
   selectedDirection,
@@ -97,7 +94,6 @@ function Market({
   disabled,
 }: {
   view: GameView;
-  movements: MarketEvent[];
   selectedActionId: number | null;
   selectedPlanId: string | null;
   selectedDirection: "up" | "down" | null;
@@ -122,17 +118,33 @@ function Market({
         {view.companies.map((company) => {
           const action = actions.get(company.company_id);
           const plan = plansByCompany.get(company.company_id);
-          const movement = movements.find((event) => event.company_id === company.company_id);
+          const delta = company.price_delta_dollars_per_share;
+          const bankrupt = view.checkpoint?.kind === "round_result" && company.price_dollars_per_share === 0;
           const body = (
-            <span className={styles.marketCompany} data-company-id={company.company_id}>
+            <span
+              className={styles.marketCompany}
+              data-company-id={company.company_id}
+              data-bankrupt-company={bankrupt ? company.company_id : undefined}
+            >
               <StockPattern pattern={company.pattern} />
-              <span className={styles.marketName}>{company.display_name}</span>
-              <span className={styles.marketPrice}>{price(company.price_dollars_per_share)}</span>
-              {movement?.price_delta != null && movement.price_delta !== 0 && (
-                <span className={movement.price_delta > 0 ? styles.positive : styles.negative} aria-live="polite">
-                  {movement.price_delta > 0 ? "↑" : "↓"}{Math.abs(movement.price_delta)}
-                </span>
-              )}
+              <span
+                className={`${styles.marketName} ${bankrupt ? styles.whiteOutObject : ""}`}
+                data-market-company-name={company.company_id}
+                data-white-out={bankrupt || undefined}
+              >{company.display_name}</span>
+              <span
+                className={`${styles.marketPrice} ${bankrupt ? styles.whiteOutObject : ""}`}
+                data-market-price-value={company.company_id}
+                data-white-out={bankrupt || undefined}
+              >{price(company.price_dollars_per_share)}</span>
+              <span
+                className={`${styles.marketDelta} ${delta && delta > 0 ? styles.positive : delta && delta < 0 ? styles.negative : ""}`}
+                data-market-delta-slot={company.company_id}
+                data-market-price-delta={delta ? company.company_id : undefined}
+                aria-live="polite"
+              >
+                {delta ? `${delta > 0 ? "↑" : "↓"}${Math.abs(delta)}` : ""}
+              </span>
             </span>
           );
           if (plan) {
@@ -228,15 +240,24 @@ function Stack({ cards, tentative, companies, expanded, onUndoTentative }: {
   ];
   if (!entries.length) {
     return (
-      <span className={styles.stack} style={{ "--stack-count": 1 } as CSSProperties}>
+      <span className={styles.stack}>
         <span className={styles.stackLayer} data-empty-stockpile>
           <CardFrame aria-label="Empty stockpile" className={styles.blankCard} scale="stockpile" />
         </span>
       </span>
     );
   }
+  const stackExtent = !expanded && entries.length > 1
+    ? {
+      width: `${104 + (entries.length - 1) * 10}px`,
+      height: `${139 + (entries.length - 1) * 3}px`,
+    } as CSSProperties
+    : undefined;
   return (
-    <span className={`${styles.stack} ${expanded ? styles.stackExpanded : ""}`} style={{ "--stack-count": Math.max(entries.length, 1) } as CSSProperties}>
+    <span
+      className={`${styles.stack} ${expanded ? styles.stackExpanded : ""}`}
+      style={stackExtent}
+    >
       {entries.map(({ card: entry, tentative: tentativeEntry }, index) => {
         const detailed = expanded || index === entries.length - 1;
         const display = visiblePileCard(entry, expanded);
@@ -246,6 +267,8 @@ function Stack({ cards, tentative, companies, expanded, onUndoTentative }: {
             className={`${styles.stackLayer} ${tentativeEntry ? styles.whiteOutObject : ""}`}
             data-stack-card
             data-stack-order={index}
+            data-stack-bottom={index === 0 || undefined}
+            data-stack-top={index === entries.length - 1 || undefined}
             data-tentative-card-ref={tentativeEntry?.cardRef}
             data-white-out={tentativeEntry ? true : undefined}
             data-card-edge={!detailed ? (isFaceDown(entry) ? "blue" : "white") : undefined}
@@ -313,10 +336,10 @@ function StockpileItem({ pile, view, tentative, selectable, selected, expanded, 
 
   return (
     <article
-      className={`${styles.stockpile} ${selected ? styles.stockpileSelected : ""} ${pile.resolved ? styles.whiteOutRegion : ""}`}
+      className={`${styles.stockpile} ${expanded ? styles.stockpileExpanded : ""} ${selected ? styles.stockpileSelected : ""}`}
       aria-label={`Stockpile ${pile.stockpile_id + 1}`}
       data-stockpile-id={pile.stockpile_id}
-      data-white-out={pile.resolved || undefined}
+      data-stockpile-resolved={pile.resolved || undefined}
     >
       {selectable && (
         <button
@@ -331,7 +354,9 @@ function StockpileItem({ pile, view, tentative, selectable, selected, expanded, 
         />
       )}
       <div
-        className={styles.stackInspect}
+        className={`${styles.stackInspect} ${pile.resolved ? styles.whiteOutRegion : ""}`}
+        data-stockpile-stack={pile.stockpile_id}
+        data-white-out={pile.resolved || undefined}
         data-stack-inspect={pile.stockpile_id}
         aria-label={selectable
           ? `Select stockpile; double-click to ${expanded ? "collapse" : "expand"}`
@@ -352,7 +377,7 @@ function StockpileItem({ pile, view, tentative, selectable, selected, expanded, 
       >
         <Stack cards={pile.cards_bottom_to_top} tentative={tentative} companies={view.companies} expanded={expanded} onUndoTentative={onUndoTentative} />
       </div>
-      {pile.bid && <span className={styles.bid}>{bidderName(view, pile)} {money(pile.bid.amount_thousands)}</span>}
+      {pile.bid && <span className={styles.bid} data-stockpile-bid>{bidderName(view, pile)} {money(pile.bid.amount_thousands)}</span>}
     </article>
   );
 }
@@ -392,14 +417,25 @@ function StockpileField({ view, expanded, selectedStockpileId, selectablePiles, 
 }
 
 function Portfolio({ view, served }: { view: GameView; served: boolean }) {
+  const bankruptCompanyIds = new Set(
+    view.checkpoint?.kind === "round_result"
+      ? view.companies.filter((company) => company.price_dollars_per_share === 0).map((company) => company.company_id)
+      : [],
+  );
   return (
     <section className={`${styles.module} ${styles.portfolio}`} aria-label="Portfolio">
       <SectionLabel>PORTFOLIO</SectionLabel>
       <div className={styles.portfolioCards}>
         {view.private.holdings.filter((holding) => holding.shares_thousands > 0).map((holding) => {
           const company = companyById(view, holding.company_id);
+          const whiteOut = served || bankruptCompanyIds.has(holding.company_id);
           return company ? (
-            <span key={holding.company_id} className={served ? styles.whiteOutObject : ""} data-white-out={served || undefined}>
+            <span
+              key={holding.company_id}
+              className={whiteOut ? styles.whiteOutObject : ""}
+              data-portfolio-company-id={holding.company_id}
+              data-white-out={whiteOut || undefined}
+            >
               <HoldingCard company={company} sharesThousands={holding.shares_thousands} />
             </span>
           ) : null;
@@ -410,8 +446,14 @@ function Portfolio({ view, served }: { view: GameView; served: boolean }) {
 }
 
 function Delta({ value }: { value: number | null }) {
-  if (!value) return null;
-  return <span className={value > 0 ? styles.positive : styles.negative}>{value > 0 ? "+" : "−"}${Math.abs(value)}K</span>;
+  return (
+    <span
+      className={`${styles.playerDelta} ${value && value > 0 ? styles.positive : value && value < 0 ? styles.negative : ""}`}
+      data-player-delta-slot
+    >
+      {value ? `${value > 0 ? "+" : "−"}$${Math.abs(value)}K` : ""}
+    </span>
+  );
 }
 
 function Players({ view }: { view: GameView }) {
@@ -422,8 +464,8 @@ function Players({ view }: { view: GameView }) {
         {[...view.players].sort((a, b) => a.role === "human" ? -1 : b.role === "human" ? 1 : 0).map((player) => (
           <div className={styles.player} key={player.player_id} data-player-role={player.role}>
             <span>{player.role === "human" ? "YOU" : "COMPUTER"}</span>
-            <div className={styles.metric} data-player-metric="cash"><span>CASH</span><span>{money(player.cash_thousands)}</span><Delta value={player.cash_delta_thousands} /></div>
-            {player.role === "human" && <div className={styles.metric} data-player-metric="position"><span>POSITION</span><span>{money(player.position_value_thousands)}</span><Delta value={player.position_delta_thousands} /></div>}
+            <div className={styles.metric} data-player-metric="cash"><span>CASH</span><span data-player-value-slot>{money(player.cash_thousands)}</span><Delta value={player.cash_delta_thousands} /></div>
+            {player.role === "human" && <div className={styles.metric} data-player-metric="position"><span>POSITION</span><span data-player-value-slot>{money(player.position_value_thousands)}</span><Delta value={player.position_delta_thousands} /></div>}
           </div>
         ))}
       </div>
@@ -577,7 +619,26 @@ function DecisionContents({ view, decision, onDirection, onPlan, onAction, disab
         );
       })}</>;
   }
-  return <>{view.legal_actions.map((action) => {
+  const nonHoldSale = view.legal_actions.find((action) => (
+    action.control === "sell"
+    && action.sale_preview !== null
+    && action.sale_preview.shares_thousands > 0
+  ));
+  const sellingCompanyId = view.pending_decision.kind === "sell"
+    ? view.pending_decision.company_id ?? nonHoldSale?.sale_preview?.company_id ?? null
+    : null;
+  const sellingCompany = companyById(view, sellingCompanyId);
+  const sellingHolding = sellingCompanyId === null
+    ? undefined
+    : view.private.holdings.find((holding) => holding.company_id === sellingCompanyId);
+
+  return <>
+    {sellingCompany && sellingHolding && (
+      <span className={styles.cardAction} data-selling-company-id={sellingCompany.company_id}>
+        <HoldingCard company={sellingCompany} sharesThousands={sellingHolding.shares_thousands} scale="active" />
+      </span>
+    )}
+    {view.legal_actions.map((action) => {
     if (action.control === "company" || action.control === "stockpile") return null;
     if (action.control === "action_card") {
       const card = view.private.available_action_cards.find((candidate) => candidate.direction === action.direction);
@@ -600,7 +661,8 @@ function DecisionContents({ view, decision, onDirection, onPlan, onAction, disab
         {actionText(action)}
       </TextButton>
     );
-  })}</>;
+    })}
+  </>;
 }
 
 function ActionDock({ view, supply, decision, contextLabel, contextEnabled, contextPlanId, contextActionId, onContext, onResign, resignArmed, onSupplyCard, onSupplyVisibility, onUndoSupplyCard, onDirection, onPlan, onAction, disabled, contentDisabled }: {
@@ -703,13 +765,6 @@ function TerminalField({ view }: { view: GameView }) {
   );
 }
 
-function currentMovements(view: GameView) {
-  const events = view.recent_events.filter((event) => event.company_id !== null && event.price_delta !== null);
-  if (!events.length) return [];
-  const last = events.at(-1)!;
-  return events.filter((event) => event.round === last.round && event.cause === last.cause);
-}
-
 function isHumanDecision(view: GameView) {
   return view.active_player_id === view.viewer.player_id
     && !view.checkpoint
@@ -733,34 +788,10 @@ export function GamePage({ gameId, token, navigate = (url: string) => window.loc
   useEffect(() => { setSupplyUi(EMPTY_SUPPLY); }, [supplyKey]);
   useEffect(() => { setDecisionUi(EMPTY_DECISION); }, [decisionKey]);
 
-  const movementBatch = useMemo(() => liveView ? currentMovements(liveView) : [], [liveView]);
-  const movementKey = movementBatch.map((event) => event.event_id).join(":");
-  const movementCheckpointKind = liveView?.checkpoint?.kind;
-  const hasView = liveView !== null;
-  const [movements, setMovements] = useState<MarketEvent[]>([]);
-  const movementViewInitialized = useRef(false);
-  useEffect(() => {
-    if (!hasView) return;
-    if (!movementViewInitialized.current) {
-      movementViewInitialized.current = true;
-      setMovements(movementCheckpointKind === "round_result" ? movementBatch : []);
-      return;
-    }
-    if (!movementKey) {
-      setMovements([]);
-      return;
-    }
-    setMovements(movementBatch);
-    if (movementCheckpointKind === "round_result") return;
-    const timer = window.setTimeout(() => setMovements([]), 2400);
-    return () => window.clearTimeout(timer);
-  }, [hasView, movementBatch, movementCheckpointKind, movementKey]);
-
   if (!liveView && !error) return <main className={styles.centerState}>OPENING GAME</main>;
-  if (!liveView) return <main className={styles.centerState}><span>GAME UNAVAILABLE</span><span>{error}</span><TextButton onClick={() => window.location.assign("/")}>NEW GAME</TextButton></main>;
+  if (!liveView) return <main className={styles.centerState}><span>GAME UNAVAILABLE</span><TextButton onClick={() => window.location.assign("/")}>NEW GAME</TextButton></main>;
 
   const view = showBackView && backView ? backView : liveView;
-  const shownMovements = showBackView ? currentMovements(view) : movements;
   const supplyDraft = supplyUi.draft;
   const selectedSupplyAssignment = supplyUi.selectedCardRef ? supplyDraft[supplyUi.selectedCardRef] : undefined;
   const supplyTargets = new Set<number>();
@@ -918,7 +949,7 @@ export function GamePage({ gameId, token, navigate = (url: string) => window.loc
       {error && <div className={styles.errorBanner} role="alert">{error}</div>}
       <div className={styles.workstation} data-testid="workstation" data-decision-kind={view.pending_decision.kind} data-checkpoint-kind={view.checkpoint?.kind}>
         <Status view={view} />
-        <Market view={view} movements={shownMovements} selectedActionId={decisionUi.actionId} selectedPlanId={decisionUi.planId} selectedDirection={decisionUi.direction} onSelectAction={selectAction} onSelectImpactCompany={selectPlan} disabled={interactionDisabled} />
+        <Market view={view} selectedActionId={decisionUi.actionId} selectedPlanId={decisionUi.planId} selectedDirection={decisionUi.direction} onSelectAction={selectAction} onSelectImpactCompany={selectPlan} disabled={interactionDisabled} />
         <Research view={view} served={view.checkpoint?.kind === "round_result" || Boolean(view.terminal_results)} />
         {view.terminal_results ? <TerminalField view={view} /> : (
           <StockpileField

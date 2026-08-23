@@ -29,6 +29,18 @@ from .. import complexity_cache
 from .. import stockpile_interface as interface
 from .config import DeepCFRConfig
 from .encoding import ENCODING_SCHEMA_VERSION, InformationInput, TraceSession
+from .learning_curve import (
+    LEARNING_CURVE_PLOT_NAME,
+    LearningCurveStore,
+    bootstrap_seed,
+    checkpoint_evaluation_seed,
+    cumulative_traversals,
+    evaluate_learning_curve_checkpoint,
+    evaluation_checkpoint_iterations,
+    plot_learning_curve,
+    stage_evaluation_seed,
+    stage_traversals,
+)
 from .memory import ReservoirBuffer
 from .models import DeepCFRNetwork, masked_softmax, validate_network_contract
 from .policy import (
@@ -107,6 +119,9 @@ class TrainingResult:
     final_checkpoint: Path
     final_policy: Path
     metrics: tuple[dict[str, Any], ...]
+    target_reached: bool = False
+    final_win_rate: float | None = None
+    cumulative_traversals: int = 0
 
 
 def _json_value(value: Any) -> Any:
@@ -238,6 +253,19 @@ class DeepCFRTrainer:
         self._resume_loaded = False
         self._loaded_checkpoint_path: Path | None = None
         self.regret_archive = RegretSidecarArchive(config.output_dir)
+        self.learning_curve = LearningCurveStore(
+            config.output_dir,
+            run_seed=config.seed,
+            evaluation_pairs=config.learning_curve_evaluation_pairs,
+            bootstrap_resamples=config.learning_curve_bootstrap_resamples,
+        )
+        self._learning_curve_schedule = evaluation_checkpoint_iterations(
+            config.iterations_per_stage,
+            checkpoint_count=config.learning_curve_checkpoint_count,
+        )
+        self._until_target_reached = False
+        self._stop_training = False
+        self._last_evaluation_win_rate: float | None = None
 
     @staticmethod
     def _validate_configuration(
@@ -711,7 +739,12 @@ class DeepCFRTrainer:
             "metrics": self.metrics,
         }
 
-    def save_checkpoint(self) -> tuple[Path, Path]:
+    def save_checkpoint(
+        self,
+        *,
+        preserve_intermediate: bool = False,
+        cumulative_traversal_count: int | None = None,
+    ) -> tuple[Path, Path]:
         """Atomically replace the full-resume and compact policy artifacts."""
 
         assert self.strategy_network is not None
@@ -735,6 +768,26 @@ class DeepCFRTrainer:
             policy_temporary,
         )
         policy_temporary.replace(policy_path)
+
+        if preserve_intermediate:
+            if cumulative_traversal_count is None:
+                raise ValueError(
+                    "cumulative_traversal_count is required when preserving "
+                    "intermediate checkpoints"
+                )
+            archive_dir = (
+                self.config.output_dir
+                / "checkpoints"
+                / f"traversals_{int(cumulative_traversal_count):09d}"
+            )
+            archive_dir.mkdir(parents=True, exist_ok=True)
+            archived_full = archive_dir / "full.pt"
+            archived_policy = archive_dir / "policy.pt"
+            if not archived_full.exists():
+                archived_full.write_bytes(full_path.read_bytes())
+            if not archived_policy.exists():
+                archived_policy.write_bytes(policy_path.read_bytes())
+
         return full_path, policy_path
 
     def load_checkpoint(self, path: str | Path) -> None:
@@ -1007,6 +1060,7 @@ class DeepCFRTrainer:
                 )
             self._write_run_config()
             metrics_path.write_text("", encoding="utf-8")
+            self.learning_curve.reset()
             self._reset_stage(0, transfer_weights=False)
         else:
             if overwrite:
@@ -1021,6 +1075,7 @@ class DeepCFRTrainer:
                     )
             else:
                 self.load_checkpoint(checkpoint)
+            self.learning_curve.load()
             # A preload is single-use.  A later train() call on this object
             # must restore the requested checkpoint again rather than silently
             # continuing mutated state from an earlier call.
@@ -1040,7 +1095,29 @@ class DeepCFRTrainer:
             self.config.curriculum.rounds[: self.stage_index]
         )
         final_checkpoint = final_policy = Path()
+        self._until_target_reached = False
+        self._stop_training = False
+        self._last_evaluation_win_rate = None
+        if self.config.until_win_rate_enabled:
+            required = int(self.config.until_win_rate_consecutive)
+            streak = self.learning_curve.consecutive_win_rate_streak(
+                float(self.config.until_win_rate)
+            )
+            if streak >= required and self.learning_curve.checkpoints:
+                latest = self.learning_curve.checkpoints[-1]
+                self._until_target_reached = True
+                self._stop_training = True
+                self._last_evaluation_win_rate = float(latest["win_rate"])
+                print(
+                    "TARGET REACHED: "
+                    f"{100.0 * float(latest['win_rate']):.1f}% win rate vs random "
+                    f"after {int(latest['cumulative_traversals']):,} traversals",
+                    file=self.output,
+                )
+
         for stage_index in range(self.stage_index, len(self.config.curriculum.rounds)):
+            if self._stop_training:
+                break
             if stage_index != self.stage_index:
                 self._reset_stage(stage_index, transfer_weights=True)
             assert self.stage_configuration is not None
@@ -1050,7 +1127,7 @@ class DeepCFRTrainer:
                 f"{round_count} round(s)",
                 file=self.output,
             )
-            while self.stage_iteration < self.config.iterations_per_stage:
+            while self._stage_should_continue(stage_index):
                 started = time.perf_counter()
                 self.stage_iteration += 1
                 self.global_iteration += 1
@@ -1155,14 +1232,56 @@ class DeepCFRTrainer:
                     ),
                 }
                 self._append_metric(metric)
+                iteration_budget = self._stage_iteration_budget(stage_index)
                 print(
                     f"  iteration {self.stage_iteration}/"
-                    f"{self.config.iterations_per_stage} "
+                    f"{iteration_budget} "
                     f"strategy_loss={metric['strategy_loss']!r}",
                     file=self.output,
                 )
-                if self.stage_iteration % self.config.checkpoint_every == 0:
-                    final_checkpoint, final_policy = self.save_checkpoint()
+                due_until_eval = self._until_win_rate_evaluation_due()
+                if (
+                    self.stage_iteration % self.config.checkpoint_every == 0
+                    or due_until_eval
+                ):
+                    traversal_count = self._cumulative_traversal_count(stage_index)
+                    final_checkpoint, final_policy = self.save_checkpoint(
+                        preserve_intermediate=due_until_eval,
+                        cumulative_traversal_count=(
+                            traversal_count if due_until_eval else None
+                        ),
+                    )
+                self._evaluate_learning_curve_if_due(stage_index, round_count)
+                if self._stop_training:
+                    break
+
+            if self.config.until_win_rate_enabled:
+                if (
+                    not self._until_target_reached
+                    and self.stage_iteration > 0
+                    and not self.learning_curve.contains(
+                        stage_index, self.stage_iteration
+                    )
+                ):
+                    traversal_count = self._cumulative_traversal_count(stage_index)
+                    final_checkpoint, final_policy = self.save_checkpoint(
+                        preserve_intermediate=True,
+                        cumulative_traversal_count=traversal_count,
+                    )
+                    self._evaluate_learning_curve_if_due(
+                        stage_index,
+                        round_count,
+                        force=True,
+                    )
+                final_checkpoint, final_policy = self.save_checkpoint()
+                if round_count not in completed:
+                    completed.append(round_count)
+                if (
+                    self._stop_training
+                    or stage_index == len(self.config.curriculum.rounds) - 1
+                ):
+                    break
+                continue
 
             if not self.stage_evaluated:
                 assert self.strategy_network is not None
@@ -1190,13 +1309,240 @@ class DeepCFRTrainer:
             final_checkpoint, final_policy = self.save_checkpoint()
             completed.append(round_count)
 
+        plot_path = self._write_learning_curve_plot()
+        if plot_path is not None:
+            print(f"Learning curve: {plot_path}", file=self.output)
+
+        cumulative = (
+            self.global_iteration * self.config.traversals_per_iteration()
+            if self.global_iteration > 0
+            else 0
+        )
+        if (
+            self.config.until_win_rate_enabled
+            and not self._until_target_reached
+            and self._last_evaluation_win_rate is not None
+        ):
+            print(
+                "MAX TRAVERSALS REACHED: "
+                f"{100.0 * self._last_evaluation_win_rate:.1f}% win rate vs random "
+                f"after {cumulative:,} traversals "
+                f"(target {100.0 * float(self.config.until_win_rate):.1f}%)",
+                file=self.output,
+            )
+
         return TrainingResult(
             output_dir=self.config.output_dir,
             completed_rounds=tuple(completed),
             final_checkpoint=final_checkpoint,
             final_policy=final_policy,
             metrics=tuple(self.metrics),
+            target_reached=self._until_target_reached,
+            final_win_rate=self._last_evaluation_win_rate,
+            cumulative_traversals=cumulative,
         )
+
+    def _evaluate_learning_curve_if_due(
+        self,
+        stage_index: int,
+        round_count: int,
+        *,
+        force: bool = False,
+    ) -> None:
+        """Pause briefly for a frozen learning-curve evaluation when scheduled."""
+
+        if not force and not self._learning_curve_evaluation_due(stage_index):
+            return
+        if self.learning_curve.contains(stage_index, self.stage_iteration):
+            return
+        assert self.stage_configuration is not None
+        assert self.strategy_network is not None
+
+        trainer_rng_state = self.rng.getstate()
+        python_rng_state = random.getstate()
+        numpy_rng_state = np.random.get_state()
+        torch_rng_state = torch.get_rng_state()
+        cuda_rng_states = (
+            torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+        )
+        mps_rng_state = (
+            torch.mps.get_rng_state() if torch.backends.mps.is_available() else None
+        )
+        network_modes = [
+            network.training
+            for network in (*self.advantage_networks, self.strategy_network)
+        ]
+
+        cumulative = self._cumulative_traversal_count(stage_index)
+        if self.config.until_win_rate_enabled:
+            evaluation_seed = checkpoint_evaluation_seed(
+                self.config.seed,
+                stage_index=stage_index,
+                stage_iteration=self.stage_iteration,
+            )
+        else:
+            evaluation_seed = stage_evaluation_seed(self.config.seed, stage_index)
+
+        try:
+            for network in (*self.advantage_networks, self.strategy_network):
+                network.eval()
+            record = evaluate_learning_curve_checkpoint(
+                self.stage_configuration.configured_game,
+                DeepCFRPolicy(
+                    self.strategy_network,
+                    device=self.device,
+                    metadata=self._metadata(),
+                ),
+                pairs=self.config.learning_curve_evaluation_pairs,
+                evaluation_seed=evaluation_seed,
+                bootstrap_resamples=self.config.learning_curve_bootstrap_resamples,
+                bootstrap_rng_seed=bootstrap_seed(
+                    self.config.seed,
+                    stage_index=stage_index,
+                    stage_iteration=self.stage_iteration,
+                ),
+                round_horizon=round_count,
+                stage_index=stage_index,
+                stage_iteration=self.stage_iteration,
+                global_iteration=self.global_iteration,
+                stage_traversal_count=stage_traversals(
+                    self.stage_iteration,
+                    self.config.traversals_per_player,
+                ),
+                cumulative_traversal_count=cumulative,
+            )
+        finally:
+            for network, was_training in zip(
+                (*self.advantage_networks, self.strategy_network),
+                network_modes,
+                strict=True,
+            ):
+                network.train(was_training)
+            self.rng.setstate(trainer_rng_state)
+            random.setstate(python_rng_state)
+            np.random.set_state(numpy_rng_state)
+            torch.set_rng_state(torch_rng_state)
+            if cuda_rng_states is not None and torch.cuda.is_available():
+                torch.cuda.set_rng_state_all(cuda_rng_states)
+            if mps_rng_state is not None and torch.backends.mps.is_available():
+                torch.mps.set_rng_state(mps_rng_state)
+
+        wrote = self.learning_curve.append(record)
+        if wrote:
+            self._last_evaluation_win_rate = float(record["win_rate"])
+            if self.config.until_win_rate_enabled:
+                print(
+                    "  evaluation "
+                    f"traversals={record['cumulative_traversals']:,} "
+                    f"games={record['evaluation_games']} "
+                    f"wins={record['wins']} losses={record['losses']} "
+                    f"ties={record['ties']} "
+                    f"win_rate={record['win_rate']:.4f} "
+                    f"mean_utility={record['mean_utility']:.4f} "
+                    f"ci95=[{record['win_rate_ci95_lower']:.4f}, "
+                    f"{record['win_rate_ci95_upper']:.4f}]",
+                    file=self.output,
+                )
+            else:
+                print(
+                    "  learning-curve "
+                    f"iter={self.stage_iteration} "
+                    f"traversals={record['cumulative_traversals']} "
+                    f"score={record['score']:.4f} "
+                    f"ci95=[{record['score_ci95_lower']:.4f}, "
+                    f"{record['score_ci95_upper']:.4f}]",
+                    file=self.output,
+                )
+            if self.config.until_win_rate_enabled:
+                self._append_metric(
+                    {
+                        "kind": "learning_curve_evaluation",
+                        **record,
+                    }
+                )
+                self._maybe_stop_for_until_win_rate(record)
+
+    def _learning_curve_evaluation_due(self, stage_index: int) -> bool:
+        if self.config.until_win_rate_enabled:
+            return self._until_win_rate_evaluation_due()
+        return self.stage_iteration in self._learning_curve_schedule
+
+    def _until_win_rate_evaluation_due(self) -> bool:
+        if not self.config.until_win_rate_enabled:
+            return False
+        every = self.config.eval_every_iterations
+        assert every is not None
+        return self.stage_iteration > 0 and self.stage_iteration % every == 0
+
+    def _stage_iteration_budget(self, stage_index: int) -> str | int:
+        if not self.config.until_win_rate_enabled:
+            return self.config.iterations_per_stage
+        if stage_index < len(self.config.curriculum.rounds) - 1:
+            return self.config.iterations_per_stage
+        assert self.config.max_traversals is not None
+        remaining_traversals = max(
+            0,
+            int(self.config.max_traversals)
+            - self.global_iteration * self.config.traversals_per_iteration(),
+        )
+        remaining_iterations = remaining_traversals // self.config.traversals_per_iteration()
+        return self.stage_iteration + remaining_iterations
+
+    def _stage_should_continue(self, stage_index: int) -> bool:
+        if self._stop_training:
+            return False
+        if not self.config.until_win_rate_enabled:
+            return self.stage_iteration < self.config.iterations_per_stage
+        if stage_index < len(self.config.curriculum.rounds) - 1:
+            return self.stage_iteration < self.config.iterations_per_stage
+        assert self.config.max_traversals is not None
+        next_traversals = (
+            self.global_iteration + 1
+        ) * self.config.traversals_per_iteration()
+        return next_traversals <= int(self.config.max_traversals)
+
+    def _cumulative_traversal_count(self, stage_index: int) -> int:
+        if self.config.until_win_rate_enabled:
+            return self.global_iteration * self.config.traversals_per_iteration()
+        return cumulative_traversals(
+            stage_index=stage_index,
+            stage_iteration=self.stage_iteration,
+            iterations_per_stage=self.config.iterations_per_stage,
+            traversals_per_player=self.config.traversals_per_player,
+        )
+
+    def _maybe_stop_for_until_win_rate(self, record: dict[str, Any]) -> None:
+        assert self.config.until_win_rate is not None
+        assert self.config.max_traversals is not None
+        win_rate = float(record["win_rate"])
+        traversals = int(record["cumulative_traversals"])
+        required = int(self.config.until_win_rate_consecutive)
+        streak = self.learning_curve.consecutive_win_rate_streak(
+            float(self.config.until_win_rate)
+        )
+        if streak >= required:
+            self._until_target_reached = True
+            self._stop_training = True
+            print(
+                "TARGET REACHED: "
+                f"{100.0 * win_rate:.1f}% win rate vs random "
+                f"after {traversals:,} traversals",
+                file=self.output,
+            )
+            return
+        if traversals >= int(self.config.max_traversals):
+            self._stop_training = True
+
+    def _write_learning_curve_plot(self) -> Path | None:
+        if not self.learning_curve.checkpoints:
+            return None
+        destination = (
+            self.config.output_dir / "analysis" / LEARNING_CURVE_PLOT_NAME
+        )
+        try:
+            return plot_learning_curve(self.learning_curve.json_path, destination)
+        except ImportError:
+            return None
 
 
 __all__ = [

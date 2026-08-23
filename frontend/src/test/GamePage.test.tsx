@@ -28,8 +28,14 @@ describe("disciplined Stockpile Trainer game surface", () => {
     expect(primitiveCss).toMatch(/\.active,[^}]*\.portfolio,[^}]*\.information\s*\{\s*width:\s*54px;\s*height:\s*72px;/s);
     expect(gameCss).toContain(".selected { transform: translateY(-4px); }");
     expect(gameCss).toMatch(/\.hiddenCard\s*\{[^}]*background:\s*var\(--blue\)/s);
+    expect(gameCss).toMatch(/\[data-card-scale="portfolio"\] \.cardValue,\s*\[data-card-scale="active"\] \.cardValue,\s*\[data-card-scale="information"\] \.cardValue\s*\{[^}]*right:\s*3px;[^}]*bottom:\s*2px;[^}]*font-size:\s*var\(--secondary-size\)/s);
+    expect(gameCss).toMatch(/\.stack\s*\{[^}]*width:\s*104px;[^}]*height:\s*139px;/s);
+    expect(gameCss).not.toContain("--stack-count");
     expect(gameCss).toContain("grid-template-columns: minmax(0, 74px) minmax(0, 1fr)");
     expect(gameCss).toMatch(/\.dockControls\s*\{[^}]*gap:\s*8px;/s);
+    expect(gameCss).toContain("grid-template-columns: 20px minmax(0, 1fr) 12ch 4ch");
+    expect(gameCss).toContain("grid-template-columns: 8ch 6ch 7ch");
+    expect(gameCss).not.toMatch(/\.marketCompany \.positive,[^}]*grid-column/s);
   });
 
   it("renders explicit units and keeps every fact in its canonical section", async () => {
@@ -37,6 +43,10 @@ describe("disciplined Stockpile Trainer game surface", () => {
     const market = await screen.findByLabelText("Market");
     expect(within(market).getByText("$47 / SHARE")).toBeInTheDocument();
     expect(within(market).getByText("$11 / SHARE")).toBeInTheDocument();
+    expect(within(market).getByText("↑2")).toHaveAttribute("data-market-price-delta", "0");
+    expect(within(market).getByText("↓1")).toHaveAttribute("data-market-price-delta", "1");
+    expect(market.querySelectorAll("[data-market-delta-slot]")).toHaveLength(6);
+    expect(market.querySelector('[data-market-delta-slot="2"]')).toBeEmptyDOMElement();
     expect(within(screen.getByLabelText("Stockpiles")).getAllByRole("article")).toHaveLength(5);
     expect(within(screen.getByLabelText("Portfolio")).getByText("3K")).toBeInTheDocument();
 
@@ -46,6 +56,8 @@ describe("disciplined Stockpile Trainer game surface", () => {
     expect(within(players).getByText("$141K")).toBeInTheDocument();
     expect(within(players).getByText("−$9K")).toBeInTheDocument();
     expect(within(players).getByText("+$6K")).toBeInTheDocument();
+    expect(players.querySelectorAll("[data-player-value-slot]")).toHaveLength(3);
+    expect(players.querySelectorAll("[data-player-delta-slot]")).toHaveLength(3);
     expect(within(players).queryAllByText("POSITION")).toHaveLength(1);
     expect(screen.getByLabelText("Research")).toBeInTheDocument();
     expect(screen.queryByText("PUBLIC")).not.toBeInTheDocument();
@@ -62,8 +74,11 @@ describe("disciplined Stockpile Trainer game surface", () => {
     const first = within(field).getByLabelText("Stockpile 1");
     const layers = first.querySelectorAll("[data-stack-card]");
     expect(Array.from(layers).map((layer) => layer.getAttribute("data-stack-order"))).toEqual(["0", "1", "2"]);
+    expect(Array.from(layers).map((layer) => layer.hasAttribute("data-stack-bottom"))).toEqual([true, false, false]);
+    expect(Array.from(layers).map((layer) => layer.hasAttribute("data-stack-top"))).toEqual([false, false, true]);
     expect(Array.from(layers).map((layer) => layer.getAttribute("data-card-edge"))).toEqual(["white", "blue", null]);
     expect(Array.from(layers).map((layer) => (layer as HTMLElement).style.zIndex)).toEqual(["1", "2", "3"]);
+    expect(Array.from(layers).map((layer) => (layer as HTMLElement).style.getPropertyValue("--stack-index"))).toEqual(["0", "1", "2"]);
 
     const remembered = within(field).getByLabelText("Stockpile 2");
     const inspect = remembered.querySelector("[data-stack-inspect]") as HTMLElement;
@@ -265,6 +280,96 @@ describe("disciplined Stockpile Trainer game surface", () => {
     expect(acknowledgements).toBe(1);
   });
 
+  it("holds bankruptcy at the round checkpoint, fades only canonical facts, then renders the normalized next round", async () => {
+    const bankruptView: GameView = {
+      ...gameView,
+      active_player_id: null,
+      phase: "ROUND_RESULT",
+      phase_step: "acknowledge",
+      checkpoint: { checkpoint_id: "bankruptcy-result", kind: "round_result", round: 3 },
+      pending_decision: { ...gameView.pending_decision, kind: "acknowledge" },
+      decision_batch: null,
+      legal_actions: [],
+      companies: gameView.companies.map((company) => company.company_id === 0
+        ? { ...company, price_dollars_per_share: 0, price_delta_dollars_per_share: -3 }
+        : company),
+      private: {
+        ...gameView.private,
+        holdings: [
+          { company_id: 0, company: "Cosmic Computers", shares_thousands: 3, price_dollars_per_share: 0, market_value_thousands: 0 },
+          { company_id: 1, company: "Bottomline Bank", shares_thousands: 2, price_dollars_per_share: 3, market_value_thousands: 6 },
+        ],
+      },
+    };
+    const nextRound: GameView = {
+      ...gameView,
+      revision: 8,
+      round: 4,
+      companies: bankruptView.companies.map((company) => company.company_id === 0
+        ? { ...company, price_dollars_per_share: 5, price_delta_dollars_per_share: null }
+        : company),
+      private: {
+        ...gameView.private,
+        holdings: bankruptView.private.holdings.filter((holding) => holding.company_id !== 0),
+      },
+    };
+    server.use(
+      http.get("/api/v2/games/bankruptcy/view", () => HttpResponse.json(bankruptView)),
+      http.post("/api/v2/games/bankruptcy/acknowledgements", () => HttpResponse.json(nextRound)),
+    );
+    const user = userEvent.setup();
+    render(<GamePage gameId="bankruptcy" token="seat-secret" />);
+
+    const market = await screen.findByLabelText("Market");
+    const company = market.querySelector('[data-bankrupt-company="0"]') as HTMLElement;
+    expect(company).toBeInTheDocument();
+    expect(company.querySelector('[data-stock-pattern="matrix"]')).not.toHaveAttribute("data-white-out");
+    expect(company.querySelector('[data-market-company-name="0"]')).toHaveAttribute("data-white-out", "true");
+    expect(company.querySelector('[data-market-price-value="0"]')).toHaveTextContent("$0 / SHARE");
+    expect(company.querySelector('[data-market-price-value="0"]')).toHaveAttribute("data-white-out", "true");
+    expect(company.querySelector('[data-market-delta-slot="0"]')).toHaveTextContent("↓3");
+    expect(company.querySelector('[data-market-delta-slot="0"]')).not.toHaveAttribute("data-white-out");
+
+    const portfolio = screen.getByLabelText("Portfolio");
+    expect(portfolio.querySelector('[data-portfolio-company-id="0"]')).toHaveAttribute("data-white-out", "true");
+    expect(portfolio.querySelector('[data-portfolio-company-id="1"]')).not.toHaveAttribute("data-white-out");
+
+    await user.click(screen.getByRole("button", { name: "CONTINUE" }));
+    await waitFor(() => expect(market.querySelector('[data-bankrupt-company="0"]')).not.toBeInTheDocument());
+    expect(market.querySelector('[data-market-price-value="0"]')).toHaveTextContent("$5 / SHARE");
+    expect(portfolio.querySelector('[data-portfolio-company-id="0"]')).not.toBeInTheDocument();
+    expect(portfolio.querySelector('[data-portfolio-company-id="1"]')).toBeInTheDocument();
+  });
+
+  it("keeps a settled bid outside the resolved stack white-out", async () => {
+    const resolvedView: GameView = {
+      ...gameView,
+      active_player_id: null,
+      checkpoint: { checkpoint_id: "demand-result", kind: "demand_result", round: 3 },
+      pending_decision: { ...gameView.pending_decision, kind: "acknowledge" },
+      decision_batch: null,
+      legal_actions: [],
+      stockpiles: gameView.stockpiles.map((pile, index) => ({
+        ...pile,
+        resolved: true,
+        purchaser_id: index % 2,
+        bid: pile.bid ?? { player_id: index % 2, marker_index: index % 2, amount_thousands: index + 1 },
+      })),
+    };
+    server.use(http.get("/api/v2/games/resolved/view", () => HttpResponse.json(resolvedView)));
+    render(<GamePage gameId="resolved" token="seat-secret" />);
+
+    const pile = await screen.findByLabelText("Stockpile 1");
+    const stack = pile.querySelector("[data-stockpile-stack]") as HTMLElement;
+    const bid = pile.querySelector("[data-stockpile-bid]") as HTMLElement;
+    expect(pile).toHaveAttribute("data-stockpile-resolved", "true");
+    expect(pile).not.toHaveAttribute("data-white-out");
+    expect(stack).toHaveAttribute("data-white-out", "true");
+    expect(stack.contains(bid)).toBe(false);
+    expect(bid).toHaveTextContent("YOU $10K");
+    expect(bid).not.toHaveAttribute("data-white-out");
+  });
+
   it("stages server-authored dividend choices and never conflates cash with price movement", async () => {
     let submitted: unknown;
     const dividendView: GameView = {
@@ -302,6 +407,71 @@ describe("disciplined Stockpile Trainer game surface", () => {
     expect(submitted).toBeUndefined();
     await user.click(screen.getByRole("button", { name: "CONFIRM" }));
     await waitFor(() => expect(submitted).toEqual({ action_id: 301, expected_revision: 7 }));
+  });
+
+  it("shows the current holding beside HOLD and SELL using the sale-preview company fallback", async () => {
+    const sellView: GameView = {
+      ...gameView,
+      phase: "selling",
+      phase_step: "selling",
+      supply_batch: null,
+      decision_batch: null,
+      pending_decision: {
+        kind: "sell",
+        prompt: "SELL",
+        selected_stockpile_id: null,
+        selected_action_effect: null,
+        company_id: null,
+      },
+      private: {
+        ...gameView.private,
+        holdings: [
+          ...gameView.private.holdings,
+          { company_id: 5, company: "Epic Electric", shares_thousands: 2, price_dollars_per_share: 9, market_value_thousands: 18 },
+        ],
+      },
+      legal_actions: [
+        {
+          action_id: 401,
+          control: "sell",
+          label: "HOLD",
+          target_id: null,
+          amount_thousands: null,
+          direction: null,
+          sale_preview: { company_id: 5, company: "Epic Electric", shares_thousands: 0, price_dollars_per_share: 9, gross_value_thousands: 0, resulting_shares_thousands: 2 },
+        },
+        {
+          action_id: 402,
+          control: "sell",
+          label: "Sell 1K",
+          target_id: null,
+          amount_thousands: null,
+          direction: null,
+          sale_preview: { company_id: 5, company: "Epic Electric", shares_thousands: 1, price_dollars_per_share: 9, gross_value_thousands: 9, resulting_shares_thousands: 1 },
+        },
+        {
+          action_id: 403,
+          control: "sell",
+          label: "Sell 2K",
+          target_id: null,
+          amount_thousands: null,
+          direction: null,
+          sale_preview: { company_id: 5, company: "Epic Electric", shares_thousands: 2, price_dollars_per_share: 9, gross_value_thousands: 18, resulting_shares_thousands: 0 },
+        },
+      ],
+    };
+    server.use(http.get("/api/v2/games/sell/view", () => HttpResponse.json(sellView)));
+    render(<GamePage gameId="sell" token="seat-secret" />);
+
+    const dock = await screen.findByLabelText("Action dock");
+    const sellingCard = within(dock).getByLabelText("EPIC holding 2K shares");
+    expect(sellingCard).toHaveAttribute("data-card-scale", "active");
+    expect(sellingCard.closest("[data-selling-company-id]")).toHaveAttribute("data-selling-company-id", "5");
+    expect(within(dock).getByText("2K", { selector: "[data-card-value]" })).toBeInTheDocument();
+    expect(within(dock).getByRole("button", { name: "HOLD" })).toBeInTheDocument();
+    expect(within(dock).getByRole("button", { name: "Sell 1K" })).toHaveTextContent("SELL 1K +$9K");
+    expect(within(dock).getByRole("button", { name: "Sell 2K" })).toHaveTextContent("SELL 2K +$18K");
+    expect(dock.querySelectorAll("[data-selling-company-id]")).toHaveLength(1);
   });
 
   it("keeps calculations above a shared-scale terminal chart, whites Portfolio, and omits winner copy", async () => {

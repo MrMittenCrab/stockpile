@@ -1,8 +1,8 @@
 .button {
   appearance: none;
   flex: none;
-  width: 144px;
-  height: 36px;
+  width: var(--control-width);
+  height: var(--control-height);
   padding: 0 14px;
   border: 1px solid var(--black);
   color: var(--black);

@@ -37,7 +37,7 @@ export function HoldingCard({ company, sharesThousands, scale = "portfolio" }: {
   return (
     <CardFrame aria-label={`${company.display_name} holding ${sharesThousands}K shares`} className={styles.stockCard} scale={scale}>
       <StockPattern pattern={company.pattern} />
-      <span className={styles.cardValue}>{sharesThousands}K</span>
+      <span className={styles.cardValue} data-card-value>{sharesThousands}K</span>
     </CardFrame>
   );
 }
@@ -53,7 +53,7 @@ export function CardView({ card, companies, scale = "active", faceDownKnown = fa
     content = (
       <CardFrame aria-label={`${company?.display_name ?? card.company} stock ${card.shares_thousands}K shares`} className={styles.stockCard} scale={scale}>
         {company && <StockPattern pattern={company.pattern} />}
-        <span className={styles.cardValue}>{card.shares_thousands}K</span>
+        <span className={styles.cardValue} data-card-value>{card.shares_thousands}K</span>
         {faceDownKnown && <span className={styles.faceDownFlag}>FACE DOWN</span>}
       </CardFrame>
     );

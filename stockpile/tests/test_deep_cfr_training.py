@@ -85,6 +85,9 @@ class TrainerSmokeTests(unittest.TestCase):
             memory_capacity=64,
             checkpoint_every=1,
             evaluation_pairs=1,
+            learning_curve_pairs=1,
+            learning_curve_bootstrap_resamples=16,
+            learning_curve_checkpoint_count=10,
             seed=91,
             device="cpu",
             output_dir=output_dir,
@@ -111,6 +114,8 @@ class TrainerSmokeTests(unittest.TestCase):
             self.assertTrue(result.final_checkpoint.is_file())
             self.assertTrue(result.final_policy.is_file())
             self.assertTrue((Path(temporary) / "metrics.jsonl").is_file())
+            self.assertTrue((Path(temporary) / "learning_curve.json").is_file())
+            self.assertTrue((Path(temporary) / "learning_curve.csv").is_file())
             self.assertEqual(trainer.stage_iteration, 1)
             self.assertEqual(trainer.global_iteration, 1)
             self.assertGreater(len(trainer.advantage_memories[0]), 0)
@@ -402,6 +407,149 @@ class TrainerSmokeTests(unittest.TestCase):
                     ),
                     output=StringIO(),
                 )
+
+    def test_until_win_rate_stops_after_two_consecutive_hits(self):
+        from stockpile.training.trainer import DeepCFRTrainer
+
+        configuration = stockpile.resolve_configuration("lite", round_count=1)
+        with TemporaryDirectory() as temporary:
+            config = DeepCFRConfig(
+                curriculum=CurriculumConfig((1,)),
+                iterations_per_stage=1,
+                traversals_per_player=1,
+                advantage_train_steps=1,
+                strategy_train_steps=1,
+                batch_size=8,
+                memory_capacity=64,
+                checkpoint_every=1,
+                evaluation_pairs=1,
+                learning_curve_pairs=1,
+                learning_curve_bootstrap_resamples=16,
+                until_win_rate=0.7,
+                eval_every_traversals=2,
+                eval_games=2,
+                max_traversals=20,
+                seed=17,
+                device="cpu",
+                output_dir=Path(temporary),
+            )
+            trainer = DeepCFRTrainer(
+                config,
+                base_configuration=configuration,
+                output=StringIO(),
+            )
+            rates = [0.4, 0.75, 0.8]
+
+            def fake_evaluate(*_args, **kwargs):
+                rate = rates.pop(0) if rates else 0.8
+                games = int(kwargs["pairs"]) * 2
+                wins = int(round(rate * games))
+                return {
+                    "round_horizon": 1,
+                    "stage_index": int(kwargs["stage_index"]),
+                    "stage_iteration": int(kwargs["stage_iteration"]),
+                    "global_iteration": int(kwargs["global_iteration"]),
+                    "stage_traversals": int(kwargs["stage_traversal_count"]),
+                    "cumulative_traversals": int(kwargs["cumulative_traversal_count"]),
+                    "evaluation_pairs": int(kwargs["pairs"]),
+                    "evaluation_games": games,
+                    "wins": wins,
+                    "losses": games - wins,
+                    "ties": 0,
+                    "win_rate": float(wins / games),
+                    "win_rate_ci95_lower": max(0.0, rate - 0.05),
+                    "win_rate_ci95_upper": min(1.0, rate + 0.05),
+                    "score": float(rate),
+                    "score_ci95_lower": max(0.0, rate - 0.05),
+                    "score_ci95_upper": min(1.0, rate + 0.05),
+                    "mean_utility": float(rate - 0.5),
+                    "mean_final_cash_differential": float(rate),
+                }
+
+            with patch(
+                "stockpile.training.trainer.evaluate_learning_curve_checkpoint",
+                side_effect=fake_evaluate,
+            ):
+                result = trainer.train()
+
+            self.assertTrue(result.target_reached)
+            self.assertGreaterEqual(result.final_win_rate, 0.7)
+            self.assertEqual(result.cumulative_traversals, 6)
+            history = Path(temporary) / "evaluation_history.csv"
+            self.assertTrue(history.is_file())
+            rows = history.read_text(encoding="utf-8").strip().splitlines()
+            self.assertEqual(len(rows), 4)
+            archived = sorted((Path(temporary) / "checkpoints").iterdir())
+            self.assertEqual(len(archived), 3)
+            self.assertTrue((archived[-1] / "full.pt").is_file())
+            self.assertTrue((archived[-1] / "policy.pt").is_file())
+
+    def test_until_win_rate_stops_at_max_traversals_without_target(self):
+        from stockpile.training.trainer import DeepCFRTrainer
+
+        configuration = stockpile.resolve_configuration("lite", round_count=1)
+        with TemporaryDirectory() as temporary:
+            config = DeepCFRConfig(
+                curriculum=CurriculumConfig((1,)),
+                iterations_per_stage=1,
+                traversals_per_player=1,
+                advantage_train_steps=1,
+                strategy_train_steps=1,
+                batch_size=8,
+                memory_capacity=64,
+                checkpoint_every=1,
+                evaluation_pairs=1,
+                learning_curve_bootstrap_resamples=8,
+                until_win_rate=0.95,
+                eval_every_traversals=2,
+                eval_games=2,
+                max_traversals=6,
+                seed=3,
+                device="cpu",
+                output_dir=Path(temporary),
+            )
+            trainer = DeepCFRTrainer(
+                config,
+                base_configuration=configuration,
+                output=StringIO(),
+            )
+
+            def fake_evaluate(*_args, **kwargs):
+                games = int(kwargs["pairs"]) * 2
+                return {
+                    "round_horizon": 1,
+                    "stage_index": int(kwargs["stage_index"]),
+                    "stage_iteration": int(kwargs["stage_iteration"]),
+                    "global_iteration": int(kwargs["global_iteration"]),
+                    "stage_traversals": int(kwargs["stage_traversal_count"]),
+                    "cumulative_traversals": int(kwargs["cumulative_traversal_count"]),
+                    "evaluation_pairs": int(kwargs["pairs"]),
+                    "evaluation_games": games,
+                    "wins": 1,
+                    "losses": games - 1,
+                    "ties": 0,
+                    "win_rate": 1.0 / games,
+                    "win_rate_ci95_lower": 0.0,
+                    "win_rate_ci95_upper": 0.5,
+                    "score": 0.25,
+                    "score_ci95_lower": 0.0,
+                    "score_ci95_upper": 0.5,
+                    "mean_utility": -0.25,
+                    "mean_final_cash_differential": -1.0,
+                }
+
+            stream = StringIO()
+            trainer.output = stream
+            with patch(
+                "stockpile.training.trainer.evaluate_learning_curve_checkpoint",
+                side_effect=fake_evaluate,
+            ):
+                result = trainer.train()
+
+            self.assertFalse(result.target_reached)
+            self.assertEqual(result.cumulative_traversals, 6)
+            self.assertIsNotNone(result.final_win_rate)
+            self.assertIn("MAX TRAVERSALS REACHED", stream.getvalue())
 
 
 if __name__ == "__main__":

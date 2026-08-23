@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import chdir, redirect_stderr, redirect_stdout
 from io import StringIO
 import importlib
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -161,6 +162,9 @@ class TerminalTests(unittest.TestCase):
         self.assertIn("three stage-local reservoir", rendered)
         self.assertIn("--run", rendered)
         self.assertIn("numbered managed run", rendered)
+        self.assertIn("--until-win-rate", rendered)
+        self.assertIn("--eval-every", rendered)
+        self.assertIn("--max-traversals", rendered)
 
     def test_analyze_requires_exactly_one_source_form_and_valid_confidence(self):
         invalid = (
@@ -177,7 +181,26 @@ class TerminalTests(unittest.TestCase):
                 "1",
             ],
             ["analyze", "--mode", "lite", "--run", "0"],
-            ["analyze", "--mode", "lite", "--run", "1", "--confidence", "1"],
+            [
+                "analyze",
+                "--mode",
+                "lite",
+                "--run",
+                "1",
+                "--confidence",
+                ".8",
+            ],
+            [
+                "analyze",
+                "--method",
+                "regret",
+                "--mode",
+                "lite",
+                "--run",
+                "1",
+                "--confidence",
+                "1",
+            ],
         )
         for argv in invalid:
             with self.subTest(argv=argv), redirect_stderr(StringIO()):
@@ -185,15 +208,142 @@ class TerminalTests(unittest.TestCase):
                     terminal.main(argv, output=StringIO())
                 self.assertEqual(raised.exception.code, 2)
 
-    def test_analyze_output_directory_uses_ninety_percent_default_and_legacy_na(self):
+    def test_analyze_defaults_to_stored_evaluation_and_never_calls_regret(self):
+        records = [
+            {"kind": "iteration", "stage_index": 0, "rounds": 1},
+            {
+                "kind": "evaluation",
+                "stage_index": 0,
+                "rounds": 1,
+                "win_rate": 0.5,
+                "trained_seat_mean_utility": -1.0,
+                "trained_seat_utility_ci95": [-2.0, 0.0],
+                "mean_final_cash_differential": -9.0,
+            },
+            {
+                "kind": "evaluation",
+                "stage_index": 1,
+                "rounds": 6,
+                "win_rate": 0.0,
+                "trained_seat_mean_utility": 0.0,
+                "trained_seat_utility_ci95": [0.0, 0.25],
+                "mean_final_cash_differential": -0.004,
+            },
+            {
+                # The last record for a stage is authoritative.
+                "kind": "evaluation",
+                "stage_index": 0,
+                "rounds": 1,
+                "win_rate": 0.625,
+                "trained_seat_mean_utility": 0.125,
+                "trained_seat_utility_ci95": [-0.25, 0.5],
+                "mean_final_cash_differential": 3.0,
+            },
+        ]
+        with TemporaryDirectory() as temporary:
+            run_dir = Path(temporary).resolve()
+            (run_dir / "metrics.jsonl").write_text(
+                "".join(json.dumps(record) + "\n" for record in records),
+                encoding="utf-8",
+            )
+            output = StringIO()
+            with patch(
+                "stockpile.training.regret.analyze_run",
+                side_effect=AssertionError("evaluation must not run regret"),
+            ) as analyze_run:
+                status = terminal.main(
+                    ["analyze", "--output-dir", str(run_dir)],
+                    output=output,
+                )
+
+        self.assertEqual(status, 0)
+        analyze_run.assert_not_called()
+        lines = output.getvalue().splitlines()
+        self.assertEqual(lines[:2], ["Evaluation vs random", ""])
+        for heading in (
+            "Rounds",
+            "Win rate",
+            "Mean utility",
+            "CL",
+            "Cash margin",
+        ):
+            self.assertIn(heading, lines[2])
+        self.assertRegex(
+            lines[3],
+            r"^\s*1\s+62\.5%\s+\+0\.125\s+-0\.25 to \+0\.5\s+\+3K$",
+        )
+        self.assertRegex(
+            lines[4],
+            r"^\s*6\s+0%\s+0\s+0 to \+0\.25\s+-0\.004K$",
+        )
+        self.assertEqual(len(lines), 5)
+
+    def test_analyze_missing_evaluation_is_sparse_na_without_regret(self):
+        with TemporaryDirectory() as temporary:
+            output = StringIO()
+            with patch(
+                "stockpile.training.regret.analyze_run",
+                side_effect=AssertionError("evaluation must not run regret"),
+            ) as analyze_run:
+                status = terminal.main(
+                    ["analyze", "--output-dir", temporary],
+                    output=output,
+                )
+
+        self.assertEqual(status, 0)
+        analyze_run.assert_not_called()
+        self.assertEqual(output.getvalue(), "Evaluation vs random\n\nN/A\n")
+
+    def test_analyze_rejects_conflicting_rounds_for_one_evaluation_stage(self):
+        base = {
+            "kind": "evaluation",
+            "stage_index": 0,
+            "win_rate": 0.5,
+            "trained_seat_mean_utility": 0.0,
+            "trained_seat_utility_ci95": [0.0, 0.0],
+            "mean_final_cash_differential": 0.0,
+        }
+        with TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            (run_dir / "metrics.jsonl").write_text(
+                json.dumps({**base, "rounds": 1})
+                + "\n"
+                + json.dumps({**base, "rounds": 2})
+                + "\n",
+                encoding="utf-8",
+            )
+            error_output = StringIO()
+            with redirect_stderr(error_output), self.assertRaises(
+                SystemExit
+            ) as raised:
+                terminal.main(
+                    ["analyze", "--output-dir", str(run_dir)],
+                    output=StringIO(),
+                )
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn(
+            "evaluation stage 0 has conflicting rounds on line 2",
+            error_output.getvalue(),
+        )
+
+    def test_analyze_regret_uses_ninety_percent_default_and_legacy_na(self):
         captured = {}
 
-        def analyze_run(path, *, confidence, bootstrap_replicates, seed):
+        def analyze_run(
+            path,
+            *,
+            confidence,
+            bootstrap_replicates,
+            seed,
+            progress,
+        ):
             captured.update(
                 path=path,
                 confidence=confidence,
                 bootstrap_replicates=bootstrap_replicates,
                 seed=seed,
+                progress=progress,
             )
             return {
                 "availability": {"available": False},
@@ -215,7 +365,13 @@ class TerminalTests(unittest.TestCase):
                 {"stockpile.training.regret": regret_module},
             ):
                 status = terminal.main(
-                    ["analyze", "--output-dir", str(run_dir)],
+                    [
+                        "analyze",
+                        "--method",
+                        "regret",
+                        "--output-dir",
+                        str(run_dir),
+                    ],
                     output=output,
                 )
 
@@ -225,9 +381,10 @@ class TerminalTests(unittest.TestCase):
         self.assertEqual(captured["confidence"], 0.90)
         self.assertEqual(captured["bootstrap_replicates"], 10_000)
         self.assertEqual(captured["seed"], 0)
+        self.assertTrue(callable(captured["progress"]))
         self.assertEqual(
             output.getvalue(),
-            "training_average_regret = N/A\nconfidence_interval = N/A\n",
+            "Sampled regret\n\nN/A\n",
         )
 
     def test_analyze_persists_declared_new_format_before_first_iteration(self):
@@ -255,7 +412,13 @@ class TerminalTests(unittest.TestCase):
                 {"stockpile.training.regret": regret_module},
             ):
                 status = terminal.main(
-                    ["analyze", "--output-dir", str(run_dir)],
+                    [
+                        "analyze",
+                        "--method",
+                        "regret",
+                        "--output-dir",
+                        str(run_dir),
+                    ],
                     output=output,
                 )
 
@@ -263,10 +426,10 @@ class TerminalTests(unittest.TestCase):
         self.assertEqual(captured, {"path": run_dir, "report": report})
         self.assertEqual(
             output.getvalue(),
-            "training_average_regret = N/A\nconfidence_interval = N/A\n",
+            "Sampled regret\n\nN/A\n",
         )
 
-    def test_analyze_mode_run_renders_each_stage_without_equilibrium_claims(self):
+    def test_analyze_regret_renders_one_final_row_and_keeps_full_json_series(self):
         report = {
             "availability": {"available": True},
             "stages": [
@@ -331,6 +494,8 @@ class TerminalTests(unittest.TestCase):
                 status = terminal.main(
                     [
                         "analyze",
+                        "--method",
+                        "regret",
                         "--mode",
                         "lite",
                         "--run",
@@ -348,22 +513,105 @@ class TerminalTests(unittest.TestCase):
                 '"availability"',
                 report_path.read_text(encoding="utf-8"),
             )
+            persisted = json.loads(report_path.read_text(encoding="utf-8"))
 
         self.assertEqual(status, 0)
         resolve_run.assert_called_once_with("lite", run=3, smoke=False)
         rendered = output.getvalue()
-        self.assertIn(
-            "sampled average regret with an empirical confidence interval",
-            rendered,
+        lines = rendered.splitlines()
+        self.assertEqual(lines[:2], ["Sampled regret", ""])
+        self.assertIn("Rounds", lines[2])
+        self.assertIn("Final regret", lines[2])
+        self.assertIn("CL", lines[2])
+        self.assertRegex(
+            lines[3],
+            r"^\s*3\s+2\.50e0\s+2\.10e0 to 3\.10e0$",
         )
-        self.assertIn("Stage 2 (rounds 3)", rendered)
-        self.assertIn("Iteration 6", rendered)
-        self.assertIn("Iteration 7", rendered)
-        self.assertIn("player 0: estimate=1.25; 80% CI=[1, 1.5]", rendered)
-        self.assertIn("player 1: estimate=2.5; 80% CI=[2, 3]", rendered)
-        self.assertIn("maximum: estimate=2.5; 80% CI=[2.1, 3.1]", rendered)
+        self.assertEqual(len(lines), 4)
+        self.assertEqual(
+            [
+                entry["stage_iteration"]
+                for entry in persisted["stages"][0]["series"]
+            ],
+            [6, 7],
+        )
+        for forbidden in ("Stage 2", "Iteration 6", "Iteration 7", "player 0"):
+            self.assertNotIn(forbidden, rendered)
         for forbidden in ("exploitability", "NashConv", "equilibrium"):
             self.assertNotIn(forbidden.lower(), rendered.lower())
+
+    def test_analyze_regret_progress_uses_stderr_for_tty_and_non_tty(self):
+        report = {
+            "availability": {"available": False},
+            "stages": [],
+        }
+
+        def analyze_run(
+            _path,
+            *,
+            confidence,
+            bootstrap_replicates,
+            seed,
+            progress,
+        ):
+            self.assertEqual(
+                (confidence, bootstrap_replicates, seed),
+                (0.90, 10_000, 0),
+            )
+            for completed in (0, 256, 10_000):
+                progress(
+                    SimpleNamespace(
+                        stage_index=0,
+                        round_count=1,
+                        completed_replicates=completed,
+                        total_replicates=10_000,
+                    )
+                )
+            return report
+
+        regret_module = ModuleType("stockpile.training.regret")
+        regret_module.analyze_run = analyze_run
+        regret_module.write_analysis_report = lambda *_args, **_kwargs: None
+
+        class TtyBuffer(StringIO):
+            def isatty(self) -> bool:
+                return True
+
+        for error_output, expected in (
+            (
+                StringIO(),
+                "Analyzing sampled regret: rounds 1 .. done\n",
+            ),
+            (
+                TtyBuffer(),
+                "\rAnalyzing sampled regret: rounds 1, bootstrap 0/10000"
+                "\rAnalyzing sampled regret: rounds 1, bootstrap 256/10000"
+                "\rAnalyzing sampled regret: rounds 1, bootstrap 10000/10000\n",
+            ),
+        ):
+            with self.subTest(tty=error_output.isatty()):
+                with TemporaryDirectory() as temporary:
+                    output = StringIO()
+                    with (
+                        patch.dict(
+                            sys.modules,
+                            {"stockpile.training.regret": regret_module},
+                        ),
+                        redirect_stderr(error_output),
+                    ):
+                        status = terminal.main(
+                            [
+                                "analyze",
+                                "--method",
+                                "regret",
+                                "--output-dir",
+                                temporary,
+                            ],
+                            output=output,
+                        )
+                self.assertEqual(status, 0)
+                self.assertEqual(output.getvalue(), "Sampled regret\n\nN/A\n")
+                self.assertEqual(error_output.getvalue(), expected)
 
     def test_lite_rules_defaults_are_resolved_parameters_only(self):
         output = StringIO()

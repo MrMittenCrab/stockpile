@@ -383,12 +383,42 @@ def run_trainer(
     output: TextIO = sys.stdout,
     startup_timeout: float = STARTUP_TIMEOUT_SECONDS,
     shutdown_timeout: float = SHUTDOWN_TIMEOUT_SECONDS,
+    computer_policy: str | None = None,
 ) -> int:
     """Start, supervise, and cleanly stop the API and Vite development server."""
 
     _url_host(host)
     root = _repository_root()
     npm = _check_prerequisites(root)
+    from .policy import (
+        COMPUTER_POLICY_ENV,
+        RANDOM_POLICY_TOKEN,
+        resolve_computer_policy_path,
+    )
+
+    if computer_policy is None:
+        configured = os.environ.get(COMPUTER_POLICY_ENV)
+        explicit_policy = False
+    else:
+        configured = computer_policy
+        explicit_policy = True
+    if configured is None:
+        try:
+            resolved = resolve_computer_policy_path()
+            os.environ[COMPUTER_POLICY_ENV] = str(resolved)
+            computer_policy_label = "deep_cfr"
+        except Exception:
+            os.environ[COMPUTER_POLICY_ENV] = RANDOM_POLICY_TOKEN
+            computer_policy_label = "random"
+    elif configured.strip().casefold() == RANDOM_POLICY_TOKEN:
+        os.environ[COMPUTER_POLICY_ENV] = RANDOM_POLICY_TOKEN
+        computer_policy_label = "random"
+    else:
+        resolved = resolve_computer_policy_path(policy=configured)
+        os.environ[COMPUTER_POLICY_ENV] = str(resolved)
+        computer_policy_label = (
+            str(resolved) if explicit_policy else "deep_cfr"
+        )
     children: list[_ChildProcess] = []
     interrupted = False
     with _sigterm_as_interrupt():
@@ -411,6 +441,7 @@ def run_trainer(
                 timeout=startup_timeout,
             )
             print("Starting Stockpile Trainer...", file=output)
+            print(f"Computer policy: {computer_policy_label}", file=output)
             print(file=output)
             print(FRONTEND_URL, file=output, flush=True)
             _monitor_children(children)

@@ -28,6 +28,7 @@ from .sessions import SessionError, SessionStore
 from .v2_schemas import (
     AcknowledgementRequestV2,
     ActionRequestV2,
+    BROWSER_ROUND_COUNT,
     CreateGameRequestV2,
     CreateGameResponseV2,
     DecisionRequestV2,
@@ -37,6 +38,7 @@ from .v2_schemas import (
     SetupResponseV2,
     SupplyRequestV2,
 )
+from .policy import ComputerPolicy, load_computer_policy
 from .v2_sessions import V2SessionStore
 
 
@@ -59,11 +61,17 @@ def create_app(
     store: SessionStore | None = None,
     *,
     store_v2: V2SessionStore | None = None,
+    computer_policy: ComputerPolicy | None = None,
 ) -> FastAPI:
     """Create an isolated application; tests may inject a fresh session store."""
 
     sessions = store or SessionStore()
-    browser_sessions = store_v2 or V2SessionStore()
+    if store_v2 is not None:
+        browser_sessions = store_v2
+    elif computer_policy is not None:
+        browser_sessions = V2SessionStore(policy=computer_policy)
+    else:
+        browser_sessions = V2SessionStore(policy=load_computer_policy())
     app = FastAPI(
         title="Stockpile Lite local play API",
         version="2.0.0",
@@ -215,7 +223,7 @@ def create_app(
         defaults = interface.resolve_configuration(
             interface.ConfigurationMode.LITE,
             player_count=2,
-            round_count=6,
+            round_count=BROWSER_ROUND_COUNT,
         )
         return SetupResponseV2(
             options=[

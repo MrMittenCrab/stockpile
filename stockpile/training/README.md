@@ -57,24 +57,75 @@ Each stage writes:
 - `policy.pt`: the smaller average-policy network and inference metadata.
 - `metrics.jsonl`: losses, memory sizes, timing, and paired seat-swapped
   evaluation against a uniform legal-action policy.
+- `learning_curve.json` / `learning_curve.csv`: predetermined in-training
+  evaluation checkpoints with bootstrap confidence intervals against random.
+- `analysis/learning_curve.png`: regenerable win-rate-vs-training graph.
 - `sampled_regret/iteration_XXXXXX.npz`: signed per-traversal outcome-sampled
   regret records, stored independently from reservoir memory.
 
-Analyze one run after completion or interruption:
+During each stage the trainer pauses at approximately ten evenly spaced
+iterations (always including the final iteration), freezes the current
+in-memory average policy, and evaluates 500 held-out seat-swapped pairs
+against uniform random (1,000 games). Pair scores use win=1 / tie=0.5 /
+loss=0; the checkpoint score is the mean pair score with a pointwise 95%
+bootstrap confidence band (10,000 resamples of complete pairs). These
+evaluation checkpoints do not write separate policy files and do not mutate
+training state.
+
+To keep training until the policy beats the random benchmark, pass
+`--until-win-rate` with a traversal budget:
+
+```console
+python -m stockpile solve --mode lite --rounds 1 \
+  --until-win-rate 0.70 --eval-every 10000 --eval-games 2000 \
+  --max-traversals 1000000
+```
+
+In that mode the solver trains in `--eval-every` traversal increments, updates
+the normal stage checkpoint, archives a copy under `checkpoints/traversals_*`,
+and evaluates with a fresh seat-balanced seed set each time. History is written
+to `evaluation_history.csv` (`traversals,games,wins,losses,ties,win_rate,
+mean_utility,ci_low,ci_high`) as well as the learning-curve artifacts. Training
+stops only after the target win rate is hit on two consecutive evaluations, or
+when `--max-traversals` is reached. Without `--until-win-rate`, solve behavior
+is unchanged.
+
+Summarize the stored paired evaluation for one run after completion or
+interruption:
 
 ```console
 python -m stockpile analyze --mode lite --run 3
-python -m stockpile analyze --output-dir artifacts/deep_cfr/lite/run_03 \
-  --confidence 0.90
+python -m stockpile analyze --output-dir artifacts/deep_cfr/lite/run_03
 ```
 
-This writes `analysis/sampled_average_regret.json`, containing player 0,
-player 1, and maximum-player values after every recorded iteration. Its
+This default report reads the last stored evaluation record for each stage
+from `metrics.jsonl`; it does not rerun evaluation games. To regenerate the
+learning-curve graph from saved checkpoint history:
+
+```console
+python -m stockpile analyze --method learning-curve --mode lite --run 3
+python -m stockpile analyze --method learning-curve \
+  --output-dir artifacts/deep_cfr/lite/run_03 \
+  --plot artifacts/deep_cfr/lite/run_03/analysis/learning_curve.png
+```
+
+To analyze sampled regret instead, select the method explicitly:
+
+```console
+python -m stockpile analyze --method regret --mode lite --run 3
+python -m stockpile analyze --method regret \
+  --output-dir artifacts/deep_cfr/lite/run_03 --confidence 0.90
+```
+
+Regret analysis writes `analysis/sampled_average_regret.json`, containing the
+full player 0, player 1, and maximum-player series after every recorded
+iteration, while the terminal prints one compact final row per stage. Its
 empirical interval resamples complete traversals only within their original
-iteration and update-player strata. It is sampled average regret, not
+iteration and update-player strata. Bootstrap progress goes to standard error;
+the result table stays on standard output. It is sampled average regret, not
 exploitability, NashConv, or a formal equilibrium guarantee. Legacy artifacts
-without the signed records report `N/A`; their reservoir samples, losses, and
-policy weights are never used as substitutes.
+without the requested evaluation or signed-regret records report `N/A`; their
+reservoir samples, losses, and policy weights are never used as substitutes.
 
 The default batch contains at most 32 samples and each of the three
 stage-local reservoirs retains at most 2,000 samples. These are deliberately

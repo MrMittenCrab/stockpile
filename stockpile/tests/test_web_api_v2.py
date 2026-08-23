@@ -54,7 +54,7 @@ class RandomComputerPolicyTest(unittest.TestCase):
         def sample(seed: int) -> list[int]:
             rng = random.Random(seed)
             return [
-                policy.choose_action(None, actions, rng)  # type: ignore[arg-type]
+                policy.choose_action(None, None, actions, rng)  # type: ignore[arg-type]
                 for _ in range(4_000)
             ]
 
@@ -70,8 +70,63 @@ class RandomComputerPolicyTest(unittest.TestCase):
     def test_policy_rejects_an_empty_legal_action_set(self) -> None:
         with self.assertRaisesRegex(ValueError, "at least one legal action"):
             RandomComputerPolicy().choose_action(  # type: ignore[arg-type]
-                None, (), random.Random(1)
+                None, None, (), random.Random(1)
             )
+
+
+
+
+class DeepCFRComputerPolicyTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        try:
+            from stockpile.web.policy import (
+                DeepCFRComputerPolicy,
+                resolve_computer_policy_path,
+            )
+            cls.checkpoint = resolve_computer_policy_path()
+            cls.policy = DeepCFRComputerPolicy.load(cls.checkpoint)
+        except Exception as error:  # Torch or artifacts may be absent.
+            cls.checkpoint = None
+            cls.policy = None
+            cls.skip_reason = str(error)
+        else:
+            cls.skip_reason = ""
+
+    def setUp(self) -> None:
+        if self.policy is None:
+            self.skipTest(self.skip_reason or "Deep CFR computer policy unavailable")
+
+    def test_loaded_policy_samples_only_legal_actions(self) -> None:
+        from stockpile.stockpile_interface import ConfigurationMode, resolve_configuration
+        from stockpile.web.policy import RandomComputerPolicy
+
+        configuration = resolve_configuration(
+            ConfigurationMode.LITE,
+            player_count=2,
+            round_count=2,
+        )
+        state = platform.GameState(configuration.game)
+        rng = random.Random(11)
+        filler = RandomComputerPolicy()
+        for _ in range(40):
+            if state.is_terminal():
+                break
+            if state.is_chance_node():
+                state.apply_action(state.chance_outcomes()[0][0])
+                continue
+            player = int(state.current_player())
+            information, legal = platform.observe_game_state(
+                configuration.rule_set, state, player
+            )
+            if player == 1:
+                action_id = self.policy.choose_action(
+                    state, information, legal, rng
+                )
+            else:
+                action_id = filler.choose_action(state, information, legal, rng)
+            self.assertIn(action_id, {action.action_id for action in legal})
+            state.apply_action(action_id)
 
 
 @unittest.skipIf(TestClient is None, "requirements-web.txt is not installed")
@@ -218,7 +273,66 @@ class WebApiV2Test(unittest.TestCase):
             ),
             session.chance_rng.getstate(),
             session.policy_rng.getstate(),
+            session.demand_cash_before,
+            session.demand_position_before,
+            tuple(session.latest_cash_deltas),
+            session.latest_human_position_delta,
+            tuple(sorted(session.latest_market_deltas.items())),
+            session.latest_presentation_event_sequence,
+            session.latest_automatic_event_sequence,
+            tuple(
+                (
+                    company_id,
+                    snapshot.round,
+                    snapshot.company_id,
+                    snapshot.prior_price,
+                    snapshot.human_shares,
+                    snapshot.presentation_sequence,
+                )
+                for company_id, snapshot in sorted(
+                    session.bankruptcy_snapshots.items()
+                )
+            ),
+            tuple(
+                (
+                    sequence,
+                    snapshot.round,
+                    snapshot.company_id,
+                    snapshot.prior_price,
+                    snapshot.human_shares,
+                    snapshot.presentation_sequence,
+                )
+                for sequence, snapshot in sorted(
+                    session.bankruptcy_event_corrections.items()
+                )
+            ),
         )
+
+    def natural_bankruptcy_checkpoint(
+        self,
+        game_id: str,
+        token: str,
+        *,
+        round_number: int,
+        company_id: int,
+    ) -> tuple[dict, object]:
+        """Reach a clone-stable bankruptcy produced only by public API actions."""
+
+        result = self.drive_until(
+            game_id,
+            token,
+            lambda item: item["checkpoint"] is not None
+            and item["checkpoint"]["kind"] == "round_result"
+            and item["checkpoint"]["round"] == round_number,
+            limit=4_000,
+        )
+        session = self.store.get(game_id)
+        self.assertIn(
+            company_id,
+            session.bankruptcy_snapshots,
+            "deterministic seed no longer reaches the expected real bankruptcy",
+        )
+        return result, session
 
     def test_setup_and_creation_are_fixed_private_and_no_store(self) -> None:
         setup_response = self.client.get("/api/v2/setup")
@@ -227,7 +341,7 @@ class WebApiV2Test(unittest.TestCase):
         setup = setup_response.json()
         self.assertEqual(setup["schema_version"], "2.0")
         self.assertEqual(setup["mode"], "lite")
-        self.assertEqual(setup["round_count"], 6)
+        self.assertEqual(setup["round_count"], 2)
         self.assertEqual(
             [(item["key"], item["default"]) for item in setup["options"]],
             [
@@ -245,7 +359,7 @@ class WebApiV2Test(unittest.TestCase):
         view_response = self.view_response(game_id, token)
         view = view_response.json()
         self.assertEqual(view["configuration"]["player_count"], 2)
-        self.assertEqual(view["configuration"]["round_count"], 6)
+        self.assertEqual(view["configuration"]["round_count"], 2)
         self.assertFalse(view["configuration"]["options"].get("starting_share", False))
         self.assertEqual(view["viewer"], {"player_id": 0, "name": "YOU"})
         self.assertEqual([player["name"] for player in view["players"]], ["YOU", "COMPUTER"])
@@ -323,8 +437,8 @@ class WebApiV2Test(unittest.TestCase):
             def __init__(self) -> None:
                 self.calls: list[tuple[int | None, tuple[int, ...], int]] = []
 
-            def choose_action(self, information, legal_actions, rng):  # type: ignore[no-untyped-def]
-                del rng
+            def choose_action(self, state, information, legal_actions, rng):  # type: ignore[no-untyped-def]
+                del state, rng
                 selected = legal_actions[0].action_id
                 self.calls.append(
                     (
@@ -674,7 +788,11 @@ class WebApiV2Test(unittest.TestCase):
             token,
             lambda item: item["phase"] == "demand" and item["checkpoint"] is None,
         )
+        session = self.store.get(game_id)
+        self.assertEqual(session.state.round, 1)
+        self.assertTrue(all(not player.fees for player in session.state.players))
         before_cash = [player["cash_thousands"] for player in demand["players"]]
+        before_position = demand["players"][0]["position_value_thousands"]
         checkpoint = self.drive_until(
             game_id,
             token,
@@ -685,9 +803,30 @@ class WebApiV2Test(unittest.TestCase):
         self.assertEqual(checkpoint["pending_decision"]["kind"], "acknowledge")
         self.assertEqual(checkpoint["legal_actions"], [])
         self.assertIsNone(checkpoint["supply_batch"])
+        acquired_fees: list[int] = []
         for index, player in enumerate(checkpoint["players"]):
             expected = player["cash_thousands"] - before_cash[index]
             self.assertEqual(player["cash_delta_thousands"], expected or None)
+            bid_total = sum(session.state.players[index].bids)
+            deferred_fee_total = sum(session.state.players[index].fees)
+            paid_fee_total = -expected - bid_total
+            self.assertGreaterEqual(paid_fee_total, 0)
+            acquired_fees.append(paid_fee_total + deferred_fee_total)
+        discarded_fee_total = sum(
+            abs(int(card.value or 0))
+            for card in session.state.discards
+            if card.card_type == platform.CardType.TRADING_FEE.value
+        )
+        self.assertGreater(discarded_fee_total, 0)
+        self.assertEqual(sum(acquired_fees), discarded_fee_total)
+        expected_position = (
+            checkpoint["players"][0]["position_value_thousands"] - before_position
+        )
+        self.assertNotEqual(expected_position, 0)
+        self.assertEqual(
+            checkpoint["players"][0]["position_delta_thousands"],
+            expected_position,
+        )
 
         repeated = self.view(game_id, token)
         self.assertEqual(repeated, checkpoint)
@@ -716,6 +855,237 @@ class WebApiV2Test(unittest.TestCase):
         self.assertEqual(wrong_ack.status_code, 409)
         self.assertEqual(wrong_ack.json()["error"]["code"], "stale_checkpoint")
         self.assertEqual(self.view(game_id, token), checkpoint)
+
+        accepted_ack = self.acknowledge(game_id, token, checkpoint)
+        self.assertEqual(accepted_ack.status_code, 200, accepted_ack.text)
+        after_ack = accepted_ack.json()
+        self.assertIsNone(after_ack["checkpoint"])
+        self.assertEqual(
+            [player["cash_delta_thousands"] for player in after_ack["players"]],
+            [player["cash_delta_thousands"] for player in checkpoint["players"]],
+        )
+        self.assertEqual(
+            after_ack["players"][0]["position_delta_thousands"],
+            checkpoint["players"][0]["position_delta_thousands"],
+        )
+
+    def test_dividend_claim_replaces_and_waive_clears_human_cash_delta(self) -> None:
+        for claim in (True, False):
+            with self.subTest(claim=claim):
+                game_id, token, _payload = self.create_game(
+                    options={"dividends": True}, seed=0
+                )
+                decision = self.drive_until(
+                    game_id,
+                    token,
+                    lambda item: item["pending_decision"]["kind"]
+                    == "dividend_claim",
+                )
+                selected = next(
+                    action
+                    for action in decision["legal_actions"]
+                    if action["control"] == "dividend"
+                    and action["label"].lower().startswith(
+                        "claim" if claim else "waive"
+                    )
+                )
+                session = self.store.get(game_id)
+                session.latest_cash_deltas = (-9, 4)
+                before_cash = decision["players"][0]["cash_thousands"]
+                response = self.submit_action(
+                    game_id, token, decision, selected["action_id"]
+                )
+                self.assertEqual(response.status_code, 200, response.text)
+                after = response.json()
+                actual_delta = after["players"][0]["cash_thousands"] - before_cash
+                if claim:
+                    self.assertGreater(actual_delta, 0)
+                    self.assertEqual(
+                        after["players"][0]["cash_delta_thousands"], actual_delta
+                    )
+                else:
+                    self.assertEqual(actual_delta, 0)
+                    self.assertIsNone(
+                        after["players"][0]["cash_delta_thousands"]
+                    )
+
+    def test_observable_sale_updates_both_metrics_and_hold_clears_both(self) -> None:
+        def selling_choice(
+            current: dict,
+            *,
+            require_sale: bool,
+        ) -> dict | None:
+            session = self.store.get(current["game_id"])
+            if (
+                current["phase"] != "selling"
+                or session.state.current_player() != 0
+            ):
+                return None
+            for action in current["legal_actions"]:
+                preview = action.get("sale_preview")
+                if preview is None:
+                    continue
+                is_sale = preview["shares_thousands"] > 0
+                if is_sale != require_sale:
+                    continue
+                successor = _apply_for_test(
+                    session, session.state, 0, action["action_id"]
+                )
+                # Keep the assertion local to the submitted sale/HOLD.  If the
+                # cursor passed to COMPUTER or Movement, automatic work could
+                # legitimately produce a later metric event in the response.
+                if (
+                    successor.phase == platform.Phase.SELLING.value
+                    and successor.current_player() == 0
+                ):
+                    return action
+            return None
+
+        for require_sale in (True, False):
+            with self.subTest(require_sale=require_sale):
+                game_id, token, _payload = self.create_game(
+                    options={"sell_order": True}, seed=23
+                )
+                demand_result = self.drive_until(
+                    game_id,
+                    token,
+                    lambda item: item["checkpoint"] is not None
+                    and item["checkpoint"]["kind"] == "demand_result",
+                )
+                purchase_human = demand_result["players"][0]
+                self.assertIsNotNone(purchase_human["cash_delta_thousands"])
+                self.assertIsNotNone(purchase_human["position_delta_thousands"])
+                acknowledged = self.acknowledge(game_id, token, demand_result)
+                self.assertEqual(acknowledged.status_code, 200, acknowledged.text)
+                self.assertEqual(
+                    acknowledged.json()["players"][0]["cash_delta_thousands"],
+                    purchase_human["cash_delta_thousands"],
+                )
+                self.assertEqual(
+                    acknowledged.json()["players"][0]["position_delta_thousands"],
+                    purchase_human["position_delta_thousands"],
+                )
+
+                selected: dict | None = None
+
+                def has_selling_choice(item: dict) -> bool:
+                    nonlocal selected
+                    selected = selling_choice(item, require_sale=require_sale)
+                    return selected is not None
+
+                selling = self.drive_until(game_id, token, has_selling_choice)
+                self.assertIsNotNone(selected)
+                before_human = selling["players"][0]
+                response = self.submit_action(
+                    game_id, token, selling, selected["action_id"]
+                )
+                self.assertEqual(response.status_code, 200, response.text)
+                after = response.json()
+                after_human = after["players"][0]
+                self.assertEqual(after["phase"], "selling")
+
+                preview = selected["sale_preview"]
+                if require_sale:
+                    self.assertGreater(preview["shares_thousands"], 0)
+                    self.assertEqual(
+                        after_human["cash_thousands"]
+                        - before_human["cash_thousands"],
+                        preview["gross_value_thousands"],
+                    )
+                    self.assertEqual(
+                        after_human["position_value_thousands"]
+                        - before_human["position_value_thousands"],
+                        -preview["gross_value_thousands"],
+                    )
+                    self.assertEqual(
+                        after_human["cash_delta_thousands"],
+                        preview["gross_value_thousands"],
+                    )
+                    self.assertEqual(
+                        after_human["position_delta_thousands"],
+                        -preview["gross_value_thousands"],
+                    )
+                else:
+                    self.assertEqual(preview["shares_thousands"], 0)
+                    self.assertEqual(
+                        after_human["cash_thousands"],
+                        before_human["cash_thousands"],
+                    )
+                    self.assertEqual(
+                        after_human["position_value_thousands"],
+                        before_human["position_value_thousands"],
+                    )
+                    self.assertIsNone(after_human["cash_delta_thousands"])
+                    self.assertIsNone(after_human["position_delta_thousands"])
+
+    def test_latest_metric_slots_replace_independently_and_market_zero_is_local(self) -> None:
+        game_id, token, _payload = self.create_game(seed=23)
+        session = self.store.get(game_id)
+        state = session.state
+        state.players[0].regular_portfolio[0] = 2
+        session.latest_cash_deltas = (-9, 4)
+        session.latest_human_position_delta = 6
+        session.latest_market_deltas = {0: 2}
+        session.latest_presentation_event_sequence = state._presentation_sequence
+
+        # A cash-capable zero replaces only that player's cash annotation.
+        self.store._replace_cash_delta(session, 0, 0)
+        self.assertEqual(session.latest_cash_deltas, (None, 4))
+        self.assertEqual(session.latest_human_position_delta, 6)
+        self.assertEqual(session.latest_market_deltas, {0: 2})
+        self.store._replace_cash_delta(session, 1, 5)
+        self.assertEqual(session.latest_cash_deltas, (None, 5))
+        self.assertEqual(session.latest_human_position_delta, 6)
+
+        def append_movement(company_id: int, actual_delta: int) -> None:
+            prior = state._company_price(company_id)
+            state._presentation_sequence += 1
+            state._presentation_events.append(
+                platform.PresentationEventRecord(
+                    presentation_sequence=state._presentation_sequence,
+                    round=state.round,
+                    event_type="market_movement",
+                    cause="test",
+                    company_id=company_id,
+                    company_name=session.rule_set.company_names[company_id],
+                    prior_price=prior,
+                    requested_delta=actual_delta,
+                    actual_delta=actual_delta,
+                    resulting_price=prior + actual_delta,
+                )
+            )
+            self.store._record_price_events(session, state)
+
+        # An unrelated company replaces only its own slot and, because YOU do
+        # not hold it, cannot disturb the current POSITION annotation.
+        append_movement(1, -1)
+        self.assertEqual(session.latest_market_deltas, {0: 2, 1: -1})
+        self.assertEqual(session.latest_human_position_delta, 6)
+
+        # A newer event replaces only the same company.  YOU hold 2K Cosmic,
+        # so its price event is also position-capable.
+        append_movement(0, -3)
+        self.assertEqual(session.latest_market_deltas, {0: -3, 1: -1})
+        self.assertEqual(session.latest_human_position_delta, -6)
+        self.assertEqual(session.latest_cash_deltas, (None, 5))
+
+        # A zero result clears the capable company, not any unrelated company
+        # or metric.  A zero for a held company also clears POSITION.
+        append_movement(1, 0)
+        self.assertEqual(session.latest_market_deltas, {0: -3})
+        self.assertEqual(session.latest_human_position_delta, -6)
+        append_movement(0, 0)
+        self.assertEqual(session.latest_market_deltas, {})
+        self.assertIsNone(session.latest_human_position_delta)
+        self.assertEqual(session.latest_cash_deltas, (None, 5))
+
+        view = self.view(game_id, token)
+        self.assertTrue(
+            all(
+                company["price_delta_dollars_per_share"] is None
+                for company in view["companies"]
+            )
+        )
 
     def test_resolved_auction_snapshot_persists_until_round_acknowledgement(self) -> None:
         game_id, token, _payload = self.create_game(seed=23)
@@ -814,10 +1184,8 @@ class WebApiV2Test(unittest.TestCase):
         self.assertEqual(stale.status_code, 409)
         self.assertEqual(stale.json()["error"]["code"], "stale_revision")
 
-    def test_round_checkpoint_position_delta_blocks_next_round_chance(self) -> None:
+    def test_round_checkpoint_preserves_latest_delta_until_actual_next_round(self) -> None:
         game_id, token, _payload = self.create_game(seed=23)
-        initial = self.view(game_id, token)
-        starting_position = initial["players"][0]["position_value_thousands"]
         checkpoint = self.drive_until(
             game_id,
             token,
@@ -825,20 +1193,195 @@ class WebApiV2Test(unittest.TestCase):
             and item["checkpoint"]["kind"] == "round_result",
         )
         human = checkpoint["players"][0]
-        expected_delta = human["position_value_thousands"] - starting_position
-        self.assertEqual(human["position_delta_thousands"], expected_delta or None)
         self.assertEqual(checkpoint["round"], 1)
         self.assertEqual(checkpoint["checkpoint"]["round"], 1)
         self.assertEqual(checkpoint["pending_decision"]["kind"], "acknowledge")
         self.assertIsNone(checkpoint["terminal_results"])
         session = self.store.get(game_id)
+        self.assertEqual(
+            human["position_delta_thousands"],
+            session.latest_human_position_delta,
+        )
+        self.assertEqual(
+            [player["cash_delta_thousands"] for player in checkpoint["players"]],
+            list(session.latest_cash_deltas),
+        )
+        self.assertEqual(
+            {
+                company["company_id"]: company["price_delta_dollars_per_share"]
+                for company in checkpoint["companies"]
+                if company["price_delta_dollars_per_share"] is not None
+            },
+            session.latest_market_deltas,
+        )
         self.assertTrue(session.state.is_chance_node())
         chance_state = session.chance_rng.getstate()
         self.assertEqual(self.view(game_id, token), checkpoint)
         self.assertEqual(session.chance_rng.getstate(), chance_state)
         acknowledged = self.acknowledge(game_id, token, checkpoint)
         self.assertEqual(acknowledged.status_code, 200, acknowledged.text)
-        self.assertEqual(acknowledged.json()["round"], 2)
+        next_round = acknowledged.json()
+        self.assertEqual(next_round["round"], 2)
+        self.assertIsNone(next_round["players"][0]["cash_delta_thousands"])
+        self.assertIsNone(next_round["players"][0]["position_delta_thousands"])
+        self.assertIsNone(next_round["players"][1]["cash_delta_thousands"])
+        self.assertTrue(
+            all(
+                company["price_delta_dollars_per_share"] is None
+                for company in next_round["companies"]
+            )
+        )
+        self.assertTrue(
+            all(event["round"] == 2 for event in next_round["recent_events"])
+        )
+
+    def test_bankruptcy_round_result_is_refresh_safe_and_private(self) -> None:
+        company_id = 3
+        game_id, token, _payload = self.create_game(seed=5)
+        result, session = self.natural_bankruptcy_checkpoint(
+            game_id, token, round_number=2, company_id=company_id
+        )
+
+        self.assertEqual(result["checkpoint"]["kind"], "round_result")
+        self.assertEqual(result["checkpoint"]["round"], 2)
+        self.assertEqual(result["pending_decision"]["kind"], "acknowledge")
+        self.assertEqual(result["legal_actions"], [])
+        self.assertIsNone(result["supply_batch"])
+        self.assertIsNone(result["decision_batch"])
+        self.assertIsNone(result["terminal_results"])
+
+        company = next(
+            item for item in result["companies"]
+            if item["company_id"] == company_id
+        )
+        self.assertEqual(company["price_dollars_per_share"], 0)
+        self.assertEqual(company["price_delta_dollars_per_share"], -3)
+        holding = next(
+            item for item in result["private"]["holdings"]
+            if item["company_id"] == company_id
+        )
+        self.assertEqual(
+            (
+                holding["shares_thousands"],
+                holding["price_dollars_per_share"],
+                holding["market_value_thousands"],
+            ),
+            (1, 0, 0),
+        )
+        self.assertNotIn("position_value_thousands", result["players"][1])
+        self.assertNotIn("position_delta_thousands", result["players"][1])
+        self.assertNotIn("holdings", result["players"][1])
+        wire = self.view_response(game_id, token).text
+        for internal_name in (
+            "bankruptcy_snapshots",
+            "bankruptcy_event_corrections",
+            "human_shares",
+        ):
+            self.assertNotIn(internal_name, wire)
+
+        bankruptcy_events = [
+            event
+            for event in result["recent_events"]
+            if event["event_type"] == "bankruptcy"
+            and event["company_id"] == company_id
+        ]
+        self.assertEqual(len(bankruptcy_events), 1)
+        event = bankruptcy_events[0]
+        self.assertEqual(
+            (
+                event["prior_price_dollars_per_share"],
+                event["price_delta"],
+                event["resulting_price_dollars_per_share"],
+                event["direction"],
+            ),
+            (3, -3, 0, "down"),
+        )
+
+        # The engine has already completed the real bankruptcy.  Only the
+        # Round Result view temporarily restores the human's now-worthless card.
+        self.assertEqual(session.state._company_price(company_id), 5)
+        self.assertEqual(session.state._represented_shares(0, company_id), 0)
+        snapshot = session.bankruptcy_snapshots[company_id]
+        self.assertEqual(
+            (snapshot.round, snapshot.prior_price, snapshot.human_shares),
+            (2, 3, 1),
+        )
+        engine_snapshot = self._engine_snapshot(session)
+        self.assertEqual(self.view(game_id, token), result)
+        self.assertEqual(self._engine_snapshot(session), engine_snapshot)
+        self.assertTrue(session.state.is_terminal())
+
+    def test_final_round_bankruptcy_result_precedes_terminal_until_acknowledged(self) -> None:
+        company_id = 2
+        game_id, token, _payload = self.create_game(seed=9)
+        result, session = self.natural_bankruptcy_checkpoint(
+            game_id, token, round_number=2, company_id=company_id
+        )
+
+        self.assertTrue(session.state.is_terminal())
+        self.assertEqual(result["checkpoint"]["kind"], "round_result")
+        self.assertEqual(result["checkpoint"]["round"], 2)
+        self.assertIsNone(result["terminal_results"])
+        result_company = next(
+            item for item in result["companies"]
+            if item["company_id"] == company_id
+        )
+        self.assertEqual(result_company["price_dollars_per_share"], 0)
+        self.assertEqual(result_company["price_delta_dollars_per_share"], -3)
+        result_holding = next(
+            item for item in result["private"]["holdings"]
+            if item["company_id"] == company_id
+        )
+        self.assertEqual(result_holding["shares_thousands"], 1)
+        self.assertEqual(self.view(game_id, token), result)
+        unrelated_final_deltas = {
+            company["company_id"]: company["price_delta_dollars_per_share"]
+            for company in result["companies"]
+            if company["company_id"] != company_id
+            and company["price_delta_dollars_per_share"] is not None
+        }
+
+        acknowledged = self.acknowledge(game_id, token, result)
+        self.assertEqual(acknowledged.status_code, 200, acknowledged.text)
+        terminal = acknowledged.json()
+        self.assertEqual(terminal["phase"], "terminal")
+        self.assertIsNone(terminal["checkpoint"])
+        self.assertIsNotNone(terminal["terminal_results"])
+        terminal_company = next(
+            item for item in terminal["companies"]
+            if item["company_id"] == company_id
+        )
+        self.assertEqual(terminal_company["price_dollars_per_share"], 5)
+        self.assertIsNone(terminal_company["price_delta_dollars_per_share"])
+        self.assertEqual(
+            {
+                company["company_id"]: company["price_delta_dollars_per_share"]
+                for company in terminal["companies"]
+                if company["company_id"] != company_id
+                and company["price_delta_dollars_per_share"] is not None
+            },
+            unrelated_final_deltas,
+        )
+        terminal_holding = next(
+            item for item in terminal["private"]["holdings"]
+            if item["company_id"] == company_id
+        )
+        self.assertEqual(terminal_holding["shares_thousands"], 0)
+        human_result = next(
+            player
+            for player in terminal["terminal_results"]["players"]
+            if player["player_id"] == 0
+        )
+        bankrupt_line = next(
+            line
+            for line in human_result["liquidation"]
+            if line["company_id"] == company_id
+        )
+        self.assertEqual(
+            (bankrupt_line["shares_thousands"], bankrupt_line["value_thousands"]),
+            (0, 0),
+        )
+        self.assertEqual(session.bankruptcy_snapshots, {})
 
     def test_sealed_selling_keeps_computer_private_and_settles_atomically(self) -> None:
         game_id, token, _payload = self.create_game(seed=11)
@@ -1052,13 +1595,13 @@ class WebApiV2Test(unittest.TestCase):
                         break
                     current = self.advance_once(game_id, token, current)
                 else:
-                    self.fail("V2 six-round playthrough exceeded action limit")
+                    self.fail("V2 two-round playthrough exceeded action limit")
 
                 self.assertEqual(
                     checkpoints,
                     [
                         item
-                        for round_number in range(1, 7)
+                        for round_number in range(1, 3)
                         for item in (
                             ("demand_result", round_number),
                             ("round_result", round_number),
@@ -1090,12 +1633,18 @@ class WebApiV2Test(unittest.TestCase):
             token,
             lambda item: item["checkpoint"] is not None
             and item["checkpoint"]["kind"] == "round_result"
-            and item["checkpoint"]["round"] == 6,
+            and item["checkpoint"]["round"] == 2,
             limit=4_000,
         )
-        self.assertEqual(result["round"], 6)
+        self.assertEqual(result["round"], 2)
         self.assertIsNone(result["terminal_results"])
         self.assertEqual(result["pending_decision"]["kind"], "acknowledge")
+        final_round_deltas = (
+            result["players"][0]["cash_delta_thousands"],
+            result["players"][0]["position_delta_thousands"],
+            result["players"][1]["cash_delta_thousands"],
+        )
+        self.assertIsNotNone(final_round_deltas[1])
         session = self.store.get(game_id)
         self.assertTrue(session.state.is_terminal())
         terminal_response = self.acknowledge(game_id, token, result)
@@ -1104,6 +1653,14 @@ class WebApiV2Test(unittest.TestCase):
         self.assertEqual(terminal["phase"], "terminal")
         self.assertIsNone(terminal["checkpoint"])
         self.assertIsNotNone(terminal["terminal_results"])
+        self.assertEqual(
+            (
+                terminal["players"][0]["cash_delta_thousands"],
+                terminal["players"][0]["position_delta_thousands"],
+                terminal["players"][1]["cash_delta_thousands"],
+            ),
+            final_round_deltas,
+        )
 
 
 if __name__ == "__main__":

@@ -61,7 +61,7 @@
 }
 .marketCompany {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) auto auto;
+  grid-template-columns: 20px minmax(0, 1fr) 12ch 4ch;
   align-items: center;
   gap: 7px;
   min-width: 0;
@@ -74,6 +74,12 @@
 }
 .marketPrice {
   font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+.marketDelta {
+  min-width: 0;
+  text-align: left;
   white-space: nowrap;
 }
 
@@ -109,13 +115,15 @@
 .stockpile {
   position: relative;
   display: grid;
+  grid-template-rows: auto 15px;
   min-width: 0;
   min-height: 200px;
-  place-content: center;
+  align-content: center;
   justify-items: center;
   gap: 10px;
   transition: transform 120ms linear;
 }
+.stockpileExpanded { grid-template-rows: auto 15px; }
 .stockpileSelected { transform: translateY(-4px); }
 .pileTarget {
   appearance: none;
@@ -137,10 +145,18 @@
   position: relative;
   z-index: 2;
   display: grid;
-  place-items: center;
+  width: max-content;
+  height: max-content;
+  min-width: 104px;
+  min-height: 139px;
+  place-items: start;
   color: var(--black);
   background: transparent;
   cursor: pointer;
+}
+.stockpileExpanded .stackInspect {
+  width: auto;
+  height: auto;
 }
 .stackInspect:focus-visible {
   outline: 1px solid var(--black);
@@ -151,15 +167,16 @@
   z-index: 2;
   font-variant-numeric: tabular-nums;
   letter-spacing: .06em;
+  white-space: nowrap;
   pointer-events: none;
+  color: var(--black);
 }
 
 .stack {
-  --stack-count: 1;
   position: relative;
   display: block;
-  width: calc(104px + (var(--stack-count) - 1) * 10px);
-  height: calc(139px + (var(--stack-count) - 1) * 3px);
+  width: 104px;
+  height: 139px;
 }
 .stackLayer {
   --stack-index: 0;
@@ -197,6 +214,7 @@
   font-variant-numeric: tabular-nums;
 }
 [data-card-scale="portfolio"] .cardValue,
+[data-card-scale="active"] .cardValue,
 [data-card-scale="information"] .cardValue {
   right: 3px;
   bottom: 2px;
@@ -248,11 +266,12 @@
 }
 .metric {
   display: grid;
-  grid-template-columns: minmax(54px, auto) auto auto;
+  grid-template-columns: 8ch 6ch 7ch;
   justify-content: start;
   gap: 10px;
   font-variant-numeric: tabular-nums;
 }
+.playerDelta { white-space: nowrap; }
 
 .actionDock {
   grid-area: dock;
@@ -418,13 +437,8 @@
   .research,
   .portfolio,
   .players { padding: 12px; }
-  .marketCompany { grid-template-columns: 15px minmax(0, 1fr) auto; gap: 5px; }
+  .marketCompany { grid-template-columns: 15px minmax(0, 1fr) 12ch 4ch; gap: 5px; }
   .marketCompany .stockPattern { width: 15px; height: 11px; }
-  .marketCompany .positive,
-  .marketCompany .negative {
-    grid-column: 2 / -1;
-    justify-self: end;
-  }
   .actionDock { grid-template-columns: 94px minmax(0, 1fr) auto; padding-inline: 12px; gap: 10px; }
 }
 

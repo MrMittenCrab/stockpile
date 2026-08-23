@@ -5,7 +5,7 @@ import type { GameView, SetupResponse } from "../types";
 export const setupResponse: SetupResponse = {
   schema_version: "2.0",
   mode: "lite",
-  round_count: 6,
+  round_count: 2,
   options: [
     { key: "trading_fees", label: "Trading Fees", default: false },
     { key: "dividends", label: "Dividends", default: false },
@@ -18,20 +18,20 @@ export const gameView: GameView = {
   schema_version: "2.0",
   game_id: "unusual",
   revision: 7,
-  configuration: { mode: "lite", player_count: 2, round_count: 6, options },
-  round: 3,
-  total_rounds: 6,
+  configuration: { mode: "lite", player_count: 2, round_count: 2, options },
+  round: 1,
+  total_rounds: 2,
   phase: "demand",
   phase_step: "demand_bid",
   viewer: { player_id: 0, name: "YOU" },
   active_player_id: 0,
   companies: [
-    { company_id: 0, symbol: "A", name: "Cosmic Computers", display_name: "COSMIC", pattern: "matrix", price_dollars_per_share: 47 },
-    { company_id: 1, symbol: "B", name: "Bottomline Bank", display_name: "BOTTOMLINE", pattern: "ledger", price_dollars_per_share: 3 },
-    { company_id: 2, symbol: "C", name: "Leading Laboratories", display_name: "LEADING", pattern: "molecular", price_dollars_per_share: 11 },
-    { company_id: 3, symbol: "D", name: "American Automotive", display_name: "AMERICAN", pattern: "chevron", price_dollars_per_share: 8 },
-    { company_id: 4, symbol: "E", name: "Stanford Steel", display_name: "STANFORD", pattern: "crosshatch", price_dollars_per_share: 5 },
-    { company_id: 5, symbol: "F", name: "Epic Electric", display_name: "EPIC", pattern: "wave", price_dollars_per_share: 9 },
+    { company_id: 0, symbol: "A", name: "Cosmic Computers", display_name: "COSMIC", pattern: "matrix", price_dollars_per_share: 47, price_delta_dollars_per_share: 2 },
+    { company_id: 1, symbol: "B", name: "Bottomline Bank", display_name: "BOTTOMLINE", pattern: "ledger", price_dollars_per_share: 3, price_delta_dollars_per_share: -1 },
+    { company_id: 2, symbol: "C", name: "Leading Laboratories", display_name: "LEADING", pattern: "molecular", price_dollars_per_share: 11, price_delta_dollars_per_share: null },
+    { company_id: 3, symbol: "D", name: "American Automotive", display_name: "AMERICAN", pattern: "chevron", price_dollars_per_share: 8, price_delta_dollars_per_share: null },
+    { company_id: 4, symbol: "E", name: "Stanford Steel", display_name: "STANFORD", pattern: "crosshatch", price_dollars_per_share: 5, price_delta_dollars_per_share: null },
+    { company_id: 5, symbol: "F", name: "Epic Electric", display_name: "EPIC", pattern: "wave", price_dollars_per_share: 9, price_delta_dollars_per_share: null },
   ],
   stockpiles: [
     {

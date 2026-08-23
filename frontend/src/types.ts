@@ -4,7 +4,7 @@ export type LiteOptions = Record<LiteOptionKey, boolean>;
 export interface SetupResponse {
   schema_version: "2.0";
   mode: "lite";
-  round_count: 6;
+  round_count: 2;
   options: Array<{ key: LiteOptionKey; label: string; default: boolean }>;
 }
 
@@ -19,6 +19,7 @@ export interface Company {
   display_name: string;
   pattern: StockPatternName;
   price_dollars_per_share: number;
+  price_delta_dollars_per_share: number | null;
 }
 
 export interface HiddenCard { visibility: "hidden" }
@@ -191,7 +192,7 @@ export interface GameView {
   schema_version: "2.0";
   game_id: string;
   revision: number;
-  configuration: { mode: "lite"; player_count: 2; round_count: 6; options: LiteOptions };
+  configuration: { mode: "lite"; player_count: 2; round_count: 2; options: LiteOptions };
   round: number;
   total_rounds: number;
   phase: string;

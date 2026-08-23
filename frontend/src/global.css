@@ -14,6 +14,8 @@
   --white: #ffffff;
   --primary-size: 28px;
   --secondary-size: 12px;
+  --control-width: 144px;
+  --control-height: 36px;
 }
 
 * { box-sizing: border-box; }

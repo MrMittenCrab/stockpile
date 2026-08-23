@@ -331,6 +331,8 @@ class TrainerArtifactCompatibilityTests(unittest.TestCase):
             memory_capacity=8,
             checkpoint_every=1,
             evaluation_pairs=1,
+            learning_curve_pairs=1,
+            learning_curve_bootstrap_resamples=8,
             seed=313,
             device="cpu",
             output_dir=output_dir,

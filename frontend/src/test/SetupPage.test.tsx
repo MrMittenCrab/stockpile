@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { SetupPage } from "../SetupPage";
 import setupCss from "../SetupPage.module.css?raw";
 import primitiveCss from "../components/Primitives.module.css?raw";
+import globalCss from "../global.css?raw";
 import { server } from "./server";
 
 afterEach(cleanup);
@@ -43,6 +44,13 @@ describe("Stockpile Trainer home", () => {
     await screen.findByRole("button", { name: "LITE+" });
     await userEvent.click(screen.getByRole("button", { name: "LITE+" }));
 
+    expect(screen.getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "LITE",
+      "LITE+",
+      "FEES",
+      "DIVIDEND",
+      "SELL ORDER",
+    ]);
     for (const name of ["DIVIDEND", "FEES", "SELL ORDER"]) {
       expect(screen.getByRole("button", { name })).toHaveAttribute("aria-pressed", "false");
     }
@@ -67,8 +75,15 @@ describe("Stockpile Trainer home", () => {
   it("uses one exact universal control geometry and no setup decoration", async () => {
     render(<SetupPage navigate={() => undefined} />);
     await screen.findByRole("button", { name: "LITE" });
-    expect(primitiveCss).toMatch(/\.button\s*\{[^}]*width:\s*144px;[^}]*height:\s*36px;/s);
-    expect(setupCss).toContain("grid-template-columns: repeat(auto-fit, 144px)");
+    expect(globalCss).toContain("--control-width: 144px");
+    expect(globalCss).toContain("--control-height: 36px");
+    expect(primitiveCss).toMatch(/\.button\s*\{[^}]*width:\s*var\(--control-width\);[^}]*height:\s*var\(--control-height\);/s);
+    expect(setupCss).toContain("grid-template-columns: repeat(3, var(--control-width))");
+    expect(setupCss).toContain("grid-template-rows: auto 56px auto 56px auto auto");
+    expect(setupCss).toContain("grid-template-columns: subgrid");
+    expect(setupCss).toMatch(/\.setup\[data-trainer-mode="lite"\] \.play\s*\{[^}]*grid-row:\s*3;[^}]*grid-column:\s*1;/s);
+    expect(setupCss).toMatch(/\.setup\[data-trainer-mode="lite_plus"\] \.play\s*\{[^}]*grid-row:\s*5;[^}]*grid-column:\s*1;/s);
+    expect(setupCss).not.toContain("justify-self: end");
     expect(`${setupCss}\n${primitiveCss}`).not.toMatch(/gradient|shadow|border-radius|font-style\s*:\s*italic|ochre/i);
     for (const forbidden of ["FEATURES", "PLAYERS", "HAND", "SPLIT", "MAJORITY", "INVESTOR", "STOCK TRACKS", "START"]) {
       expect(screen.queryByText(forbidden)).not.toBeInTheDocument();

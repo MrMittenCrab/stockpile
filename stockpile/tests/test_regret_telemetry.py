@@ -19,6 +19,7 @@ from stockpile.training.regret import (
     DEFAULT_BOOTSTRAP_SEED,
     DEFAULT_CONFIDENCE,
     REGRET_SIDECAR_SCHEMA_VERSION,
+    RegretAnalysisProgress,
     RegretArchiveError,
     RegretFormatError,
     RegretIterationCapture,
@@ -306,11 +307,13 @@ class AnalysisTests(unittest.TestCase):
             for iteration in self._two_iteration_records():
                 archive.commit(iteration)
 
+            progress: list[RegretAnalysisProgress] = []
             report = analyze_run(
                 temporary,
                 confidence=0.90,
                 bootstrap_replicates=512,
                 seed=0,
+                progress=progress.append,
             )
             repeated = analyze_run(
                 temporary,
@@ -320,6 +323,14 @@ class AnalysisTests(unittest.TestCase):
             )
 
             self.assertEqual(report, repeated)
+            self.assertEqual(
+                progress,
+                [
+                    RegretAnalysisProgress(0, 1, 1, 1, 0, 512),
+                    RegretAnalysisProgress(0, 1, 1, 1, 256, 512),
+                    RegretAnalysisProgress(0, 1, 1, 1, 512, 512),
+                ],
+            )
             self.assertTrue(report["availability"]["available"])
             self.assertEqual(report["availability"]["source"], "iteration_sidecars")
             stage = report["stages"][0]
@@ -383,12 +394,15 @@ class AnalysisTests(unittest.TestCase):
         with TemporaryDirectory() as temporary:
             run_dir = Path(temporary)
             RegretSidecarArchive(run_dir).commit(incomplete)
+            progress: list[RegretAnalysisProgress] = []
             report = analyze_run(
                 run_dir,
                 bootstrap_replicates=32,
+                progress=progress.append,
             )
 
             self.assertFalse(report["availability"]["available"])
+            self.assertEqual(progress, [])
             stage = report["stages"][0]
             self.assertFalse(stage["complete_prefix"])
             self.assertIsNone(stage["point"]["maximum"])
@@ -401,11 +415,13 @@ class AnalysisTests(unittest.TestCase):
             self.assertNotIn("NaN", destination.read_text(encoding="utf-8"))
 
     def test_legacy_run_is_na_without_loading_torch_and_defaults_are_exact(self):
+        progress: list[RegretAnalysisProgress] = []
         with TemporaryDirectory() as temporary:
             with patch.dict(sys.modules, {"torch": None}):
-                report = analyze_run(temporary)
+                report = analyze_run(temporary, progress=progress.append)
 
         self.assertFalse(report["availability"]["available"])
+        self.assertEqual(progress, [])
         self.assertEqual(report["stages"], [])
         self.assertEqual(
             report["bootstrap"],

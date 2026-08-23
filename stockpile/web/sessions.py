@@ -228,7 +228,7 @@ class SessionStore:
         with self._lock:
             session = self._sessions.get(game_id)
         if session is None:
-            raise SessionError(404, "game_not_found", "Game not found")
+            raise SessionError(404, "game_not_found", "GAME UNAVAILABLE")
         return session
 
     def authenticate(self, game_id: str, token: str | None) -> tuple[GameSession, int]:

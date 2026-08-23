@@ -5,6 +5,7 @@ import type {
   GameView,
   LegalAction,
   LiteOptions,
+  StockCard,
   SupplyBatch,
 } from "../src/types";
 
@@ -51,6 +52,11 @@ type Coverage = {
   eventTypes: Set<string>;
   checkpoints: Array<{ kind: "demand_result" | "round_result"; round: number }>;
   demandPurchasers: Map<number, number[]>;
+  demandMetricBaselines: Map<number, {
+    humanCash: number;
+    humanPosition: number;
+    computerCash: number;
+  }>;
   maxPrice: number;
   renderedPriceAboveTen: boolean;
   backChecked: boolean;
@@ -59,6 +65,12 @@ type Coverage = {
   sawDeduplicatedSales: boolean;
   sawLocalBidStep: boolean;
   sawLocalImpactTarget: boolean;
+  sawDemandMetricSettlement: boolean;
+  sawDemandMetricPersistence: boolean;
+  sawSaleMetricSettlement: boolean;
+  sawHoldMetricClear: boolean;
+  sawIndependentMetricPreservation: boolean;
+  sawNewRoundMetricClear: boolean;
   privacyFailures: string[];
   pendingAudits: Promise<void>[];
 };
@@ -72,6 +84,13 @@ type GameHarness = {
   responseListener: (response: Response) => void;
 };
 
+type FixtureHarness = {
+  gameId: string;
+  token: string;
+  view: GameView;
+  update: (next: GameView) => Promise<void>;
+};
+
 function newCoverage(): Coverage {
   return {
     views: [],
@@ -81,6 +100,7 @@ function newCoverage(): Coverage {
     eventTypes: new Set(),
     checkpoints: [],
     demandPurchasers: new Map(),
+    demandMetricBaselines: new Map(),
     maxPrice: Number.NEGATIVE_INFINITY,
     renderedPriceAboveTen: false,
     backChecked: false,
@@ -89,6 +109,12 @@ function newCoverage(): Coverage {
     sawDeduplicatedSales: false,
     sawLocalBidStep: false,
     sawLocalImpactTarget: false,
+    sawDemandMetricSettlement: false,
+    sawDemandMetricPersistence: false,
+    sawSaleMetricSettlement: false,
+    sawHoldMetricClear: false,
+    sawIndependentMetricPreservation: false,
+    sawNewRoundMetricClear: false,
     privacyFailures: [],
     pendingAudits: [],
   };
@@ -99,7 +125,9 @@ function fail(coverage: Coverage, message: string) {
 }
 
 function recordView(view: GameView, coverage: Coverage, token: string) {
-  coverage.views.push(view);
+  // POST responses are inspected both by the direct driver and the privacy
+  // listener. Keep one chronological copy per authoritative revision.
+  if (coverage.views.at(-1)?.revision !== view.revision) coverage.views.push(view);
   coverage.phases.add(view.phase.toLowerCase());
   coverage.decisions.add(view.pending_decision.kind);
   for (const event of view.recent_events) {
@@ -112,12 +140,23 @@ function recordView(view: GameView, coverage: Coverage, token: string) {
   for (const company of view.companies) {
     coverage.maxPrice = Math.max(coverage.maxPrice, company.price_dollars_per_share);
   }
+  if (view.phase.toLowerCase() === "demand" && view.checkpoint === null) {
+    const human = humanPlayer(view);
+    const computer = computerPlayer(view);
+    if (!coverage.demandMetricBaselines.has(view.round)) {
+      coverage.demandMetricBaselines.set(view.round, {
+        humanCash: human.cash_thousands,
+        humanPosition: human.position_value_thousands,
+        computerCash: computer.cash_thousands,
+      });
+    }
+  }
 
   if (view.viewer.player_id !== 0 || view.viewer.name !== "YOU") {
     fail(coverage, `Viewer changed to ${JSON.stringify(view.viewer)}`);
   }
-  if (view.configuration.player_count !== 2 || view.configuration.round_count !== 6) {
-    fail(coverage, "Browser configuration was not fixed to two players and six rounds");
+  if (view.configuration.player_count !== 2 || view.configuration.round_count !== 2) {
+    fail(coverage, "Browser configuration was not fixed to two players and two rounds");
   }
   if (view.players.length !== 2 || view.players[0]?.name !== "YOU" || view.players[1]?.name !== "COMPUTER") {
     fail(coverage, "Public player list was not exactly YOU and COMPUTER");
@@ -202,6 +241,56 @@ function recordView(view: GameView, coverage: Coverage, token: string) {
   }
 }
 
+function humanPlayer(view: GameView) {
+  const player = view.players.find((candidate) => candidate.role === "human");
+  if (!player || player.role !== "human") throw new Error("Human player is absent");
+  return player;
+}
+
+function computerPlayer(view: GameView) {
+  const player = view.players.find((candidate) => candidate.role === "computer");
+  if (!player || player.role !== "computer") throw new Error("Computer player is absent");
+  return player;
+}
+
+function nullableDelta(value: number) {
+  return value === 0 ? null : value;
+}
+
+async function expectPlayerMetric(
+  page: Page,
+  role: "human" | "computer",
+  metric: "cash" | "position",
+  current: number,
+  delta: number | null,
+) {
+  const row = page.locator(`[data-player-role="${role}"] [data-player-metric="${metric}"]`);
+  const values = row.locator(":scope > span");
+  await expect(row).toBeVisible();
+  await expect(values.nth(1)).toHaveText(`$${current}K`);
+  await expect(values).toHaveCount(3);
+  expect(await values.nth(1).getAttribute("data-player-value-slot")).not.toBeNull();
+  expect(await values.nth(2).getAttribute("data-player-delta-slot")).not.toBeNull();
+  if (delta !== null) {
+    await expect(values.nth(2)).toHaveText(`${delta > 0 ? "+" : "−"}$${Math.abs(delta)}K`);
+  } else {
+    await expect(values.nth(2)).toBeEmpty();
+  }
+}
+
+async function expectNoMetricDeltas(page: Page, view: GameView) {
+  const human = humanPlayer(view);
+  const computer = computerPlayer(view);
+  expect(human.cash_delta_thousands).toBeNull();
+  expect(human.position_delta_thousands).toBeNull();
+  expect(computer.cash_delta_thousands).toBeNull();
+  expect(view.companies.every((company) => company.price_delta_dollars_per_share === null)).toBe(true);
+  await expectPlayerMetric(page, "human", "cash", human.cash_thousands, null);
+  await expectPlayerMetric(page, "human", "position", human.position_value_thousands, null);
+  await expectPlayerMetric(page, "computer", "cash", computer.cash_thousands, null);
+  await expect(page.locator("[data-market-price-delta]")).toHaveCount(0);
+}
+
 function isGameViewResponse(response: Response, gameId: string) {
   if (!response.ok()) return false;
   const url = new URL(response.url());
@@ -279,6 +368,64 @@ async function openGame(
   };
 }
 
+async function openFixtureGame(
+  page: Page,
+  request: APIRequestContext,
+  transform: (base: GameView) => GameView,
+): Promise<FixtureHarness> {
+  const create = await request.post("/api/v2/games", {
+    data: { options: defaultOptions, seed: 313 },
+  });
+  expect(create.status()).toBe(201);
+  const created = await create.json() as CreateGameResponse;
+  const gameUrl = new URL(created.game_url, "http://127.0.0.1:5173");
+  const token = new URLSearchParams(gameUrl.hash.slice(1)).get("seat");
+  expect(token).toBeTruthy();
+  const viewPath = `/api/v2/games/${created.game_id}/view`;
+  const baseResponse = await request.get(viewPath, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  expect(baseResponse.status()).toBe(200);
+  let current = transform(await baseResponse.json() as GameView);
+
+  await page.route(`**${viewPath}`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      headers: { "Cache-Control": "no-store" },
+      body: JSON.stringify(current),
+    });
+  });
+  await page.goto(gameUrl.href);
+  await expect(page.getByTestId("workstation")).toBeVisible();
+
+  return {
+    gameId: created.game_id,
+    token: token!,
+    view: current,
+    update: async (next: GameView) => {
+      current = next;
+      const response = page.waitForResponse((candidate) => (
+        candidate.request().method() === "GET"
+        && new URL(candidate.url()).pathname === viewPath
+      ));
+      await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+      await response;
+    },
+  };
+}
+
+function fixtureStock(view: GameView, companyId: number, sharesThousands = 1): StockCard {
+  const company = view.companies.find((candidate) => candidate.company_id === companyId)!;
+  return {
+    visibility: "visible",
+    kind: "stock",
+    company_id: companyId,
+    company: company.name,
+    shares_thousands: sharesThousands,
+  };
+}
+
 async function acceptResponse(harness: GameHarness, response: Response) {
   const responseText = await response.text();
   expect(response.status(), responseText).toBe(200);
@@ -317,6 +464,7 @@ function postResponse(page: Page, gameId: string, endpoint: "actions" | "supply"
 }
 
 async function submitAction(harness: GameHarness, action: LegalAction) {
+  const before = harness.view;
   const target = action.control === "stockpile"
     ? harness.page.locator(`[data-stockpile-id="${action.target_id?.split(":").at(-1)}"] [data-stockpile-target]`)
     : harness.page.locator(`[data-action-id="${action.action_id}"]`).first();
@@ -333,7 +481,70 @@ async function submitAction(harness: GameHarness, action: LegalAction) {
     action_id: action.action_id,
     expected_revision: harness.view.revision,
   });
-  return acceptResponse(harness, response);
+  const next = await acceptResponse(harness, response);
+  const sale = action.sale_preview;
+  if (before.configuration.options.sell_order && sale) {
+    const beforeHuman = humanPlayer(before);
+    const afterHuman = humanPlayer(next);
+    const beforeComputer = computerPlayer(before);
+    const afterComputer = computerPlayer(next);
+    if (
+      sale.shares_thousands > 0
+      && next.phase === "selling"
+      && next.active_player_id === 0
+      && next.pending_decision.kind === "sell"
+    ) {
+      const cashDelta = afterHuman.cash_thousands - beforeHuman.cash_thousands;
+      const positionDelta = afterHuman.position_value_thousands - beforeHuman.position_value_thousands;
+      expect(sale.gross_value_thousands).toBe(
+        sale.shares_thousands * sale.price_dollars_per_share,
+      );
+      expect(positionDelta).toBeLessThan(0);
+      expect(afterHuman.cash_delta_thousands).toBe(nullableDelta(cashDelta));
+      expect(afterHuman.position_delta_thousands).toBe(nullableDelta(positionDelta));
+      // A COMPUTER transition cannot overwrite either human metric.
+      expect(afterComputer.cash_delta_thousands).toBe(beforeComputer.cash_delta_thousands);
+      await expectPlayerMetric(
+        harness.page,
+        "human",
+        "cash",
+        afterHuman.cash_thousands,
+        nullableDelta(cashDelta),
+      );
+      await expectPlayerMetric(
+        harness.page,
+        "human",
+        "position",
+        afterHuman.position_value_thousands,
+        nullableDelta(positionDelta),
+      );
+      harness.coverage.sawSaleMetricSettlement = true;
+      harness.coverage.sawIndependentMetricPreservation = true;
+    } else if (
+      sale.shares_thousands === 0
+      && harness.coverage.sawSaleMetricSettlement
+      && next.phase === "selling"
+      && next.active_player_id === 0
+      && next.pending_decision.kind === "sell"
+    ) {
+      expect(afterHuman.cash_thousands).toBe(beforeHuman.cash_thousands);
+      expect(afterHuman.position_value_thousands).toBe(beforeHuman.position_value_thousands);
+      expect(afterHuman.cash_delta_thousands).toBeNull();
+      expect(afterHuman.position_delta_thousands).toBeNull();
+      expect(afterComputer.cash_delta_thousands).toBe(beforeComputer.cash_delta_thousands);
+      await expectPlayerMetric(harness.page, "human", "cash", afterHuman.cash_thousands, null);
+      await expectPlayerMetric(
+        harness.page,
+        "human",
+        "position",
+        afterHuman.position_value_thousands,
+        null,
+      );
+      harness.coverage.sawHoldMetricClear = true;
+      harness.coverage.sawIndependentMetricPreservation = true;
+    }
+  }
+  return next;
 }
 
 async function submitSupply(harness: GameHarness, plan: SupplyPlan) {
@@ -375,6 +586,7 @@ async function submitSupply(harness: GameHarness, plan: SupplyPlan) {
 async function submitDecision(harness: GameHarness) {
   const batch = harness.view.decision_batch;
   expect(batch).not.toBeNull();
+  const before = harness.view;
   let planId: string;
   if (batch!.kind === "demand") {
     const plan = batch.plans[0];
@@ -404,14 +616,73 @@ async function submitDecision(harness: GameHarness) {
     plan_id: planId,
     expected_revision: harness.view.revision,
   });
-  return acceptResponse(harness, response);
+  const next = await acceptResponse(harness, response);
+  if (batch!.kind === "demand" && next.checkpoint?.kind === "demand_result") {
+    const beforeHuman = humanPlayer(before);
+    const afterHuman = humanPlayer(next);
+    const afterComputer = computerPlayer(next);
+    const baseline = harness.coverage.demandMetricBaselines.get(next.checkpoint.round) ?? {
+      humanCash: beforeHuman.cash_thousands,
+      humanPosition: beforeHuman.position_value_thousands,
+      computerCash: computerPlayer(before).cash_thousands,
+    };
+    const humanCashDelta = nullableDelta(afterHuman.cash_thousands - baseline.humanCash);
+    const humanPositionDelta = nullableDelta(
+      afterHuman.position_value_thousands - baseline.humanPosition,
+    );
+    const computerCashDelta = nullableDelta(afterComputer.cash_thousands - baseline.computerCash);
+    expect(afterHuman.cash_delta_thousands).toBe(humanCashDelta);
+    expect(afterHuman.position_delta_thousands).toBe(humanPositionDelta);
+    expect(afterComputer.cash_delta_thousands).toBe(computerCashDelta);
+    await expectPlayerMetric(harness.page, "human", "cash", afterHuman.cash_thousands, humanCashDelta);
+    await expectPlayerMetric(
+      harness.page,
+      "human",
+      "position",
+      afterHuman.position_value_thousands,
+      humanPositionDelta,
+    );
+    await expectPlayerMetric(
+      harness.page,
+      "computer",
+      "cash",
+      afterComputer.cash_thousands,
+      computerCashDelta,
+    );
+    harness.coverage.sawDemandMetricSettlement = true;
+  }
+  return next;
 }
 
 async function acknowledge(harness: GameHarness) {
   const checkpoint = harness.view.checkpoint;
   expect(checkpoint).not.toBeNull();
+  const checkpointView = harness.view;
   if (checkpoint!.kind === "demand_result") {
-    await expect(harness.page.locator('article[data-white-out="true"]')).toHaveCount(4);
+    const resolved = harness.page.locator('article[data-stockpile-resolved="true"]');
+    await expect(resolved).toHaveCount(4);
+    const isolation = await resolved.evaluateAll((piles) => piles.map((pile) => {
+      const stack = pile.querySelector<HTMLElement>("[data-stockpile-stack]")!;
+      const bid = pile.querySelector<HTMLElement>("[data-stockpile-bid]")!;
+      const bidStyle = getComputedStyle(bid);
+      return {
+        articleWhiteOut: pile.hasAttribute("data-white-out"),
+        stackWhiteOut: stack.getAttribute("data-white-out"),
+        stackOverlay: getComputedStyle(stack, "::after").backgroundColor,
+        bidWhiteOut: bid.hasAttribute("data-white-out"),
+        bidColor: bidStyle.color,
+        bidOpacity: bidStyle.opacity,
+      };
+    }));
+    expect(isolation).toHaveLength(4);
+    expect(isolation.every((item) => (
+      !item.articleWhiteOut
+      && item.stackWhiteOut === "true"
+      && item.stackOverlay === "rgba(255, 255, 255, 0.68)"
+      && !item.bidWhiteOut
+      && item.bidColor === "rgb(17, 17, 17)"
+      && item.bidOpacity === "1"
+    ))).toBe(true);
     harness.coverage.sawDemandWhiteOut = true;
   } else {
     await expect(harness.page.getByLabel("Research")).toHaveAttribute("data-white-out", "true");
@@ -428,6 +699,46 @@ async function acknowledge(harness: GameHarness) {
     expected_revision: harness.view.revision,
   });
   const next = await acceptResponse(harness, response);
+  if (
+    checkpoint!.kind === "demand_result"
+    && Object.values(checkpointView.configuration.options).every((enabled) => !enabled)
+  ) {
+    const beforeHuman = humanPlayer(checkpointView);
+    const afterHuman = humanPlayer(next);
+    const beforeComputer = computerPlayer(checkpointView);
+    const afterComputer = computerPlayer(next);
+    expect(afterHuman.cash_delta_thousands).toBe(beforeHuman.cash_delta_thousands);
+    expect(afterHuman.position_delta_thousands).toBe(beforeHuman.position_delta_thousands);
+    expect(afterComputer.cash_delta_thousands).toBe(beforeComputer.cash_delta_thousands);
+    await expectPlayerMetric(
+      harness.page,
+      "human",
+      "cash",
+      afterHuman.cash_thousands,
+      afterHuman.cash_delta_thousands,
+    );
+    await expectPlayerMetric(
+      harness.page,
+      "human",
+      "position",
+      afterHuman.position_value_thousands,
+      afterHuman.position_delta_thousands,
+    );
+    await expectPlayerMetric(
+      harness.page,
+      "computer",
+      "cash",
+      afterComputer.cash_thousands,
+      afterComputer.cash_delta_thousands,
+    );
+    harness.coverage.sawDemandMetricPersistence = true;
+    harness.coverage.sawIndependentMetricPreservation = true;
+  }
+  if (checkpoint!.kind === "round_result" && checkpoint!.round < checkpointView.total_rounds) {
+    expect(next.round).toBe(checkpoint!.round + 1);
+    await expectNoMetricDeltas(harness.page, next);
+    harness.coverage.sawNewRoundMetricClear = true;
+  }
   const back = harness.page.locator('[data-context-action="back"]');
   if (!harness.coverage.backChecked && await back.count()) {
     await back.click();
@@ -465,7 +776,25 @@ async function driveGame(harness: GameHarness, maximumSteps = 2_000) {
       expect(new Set(identities).size).toBe(identities.length);
       harness.coverage.sawDeduplicatedSales = true;
     }
-    const action = harness.view.legal_actions[0];
+    let action = harness.view.legal_actions[0];
+    if (harness.view.configuration.options.sell_order && sales.length) {
+      const currentCompany = harness.view.pending_decision.company_id;
+      const hasLaterHumanHolding = currentCompany !== null && harness.view.private.holdings.some(
+        (holding) => holding.shares_thousands > 0 && holding.company_id > currentCompany,
+      );
+      if (!harness.coverage.sawSaleMetricSettlement && hasLaterHumanHolding) {
+        action = sales.find((candidate) => (
+          candidate.sale_preview!.shares_thousands > 0
+          && candidate.sale_preview!.resulting_shares_thousands > 0
+        )) ?? sales.find((candidate) => candidate.sale_preview!.shares_thousands > 0) ?? action;
+      } else if (
+        harness.coverage.sawSaleMetricSettlement
+        && !harness.coverage.sawHoldMetricClear
+        && hasLaterHumanHolding
+      ) {
+        action = sales.find((candidate) => candidate.sale_preview!.shares_thousands === 0) ?? action;
+      }
+    }
     expect(
       action,
       `No browser action at ${harness.view.phase}/${harness.view.phase_step}/${harness.view.pending_decision.kind}`,
@@ -542,13 +871,14 @@ async function expectDisciplinedVisualLanguage(page: Page) {
 }
 
 function expectedCheckpointSequence() {
-  return Array.from({ length: 6 }, (_, index) => index + 1).flatMap((round) => [
+  return Array.from({ length: 2 }, (_, index) => index + 1).flatMap((round) => [
     { kind: "demand_result" as const, round },
     { kind: "round_result" as const, round },
   ]);
 }
 
 test("Home exposes only Trainer LITE and LITE+ through one button language", async ({ page }) => {
+  await page.setViewportSize({ width: 1_280, height: 900 });
   await page.goto("/");
   await expect(page.getByLabel("Stockpile Trainer")).toHaveText("STOCKPILE TRAINER");
   await expect(page.getByRole("button", { name: "LITE", exact: true })).toBeVisible();
@@ -575,6 +905,15 @@ test("Home exposes only Trainer LITE and LITE+ through one button language", asy
     expect(homeText).not.toContain(forbidden);
   }
 
+  await page.getByRole("button", { name: "LITE", exact: true }).click();
+  const litePlayBox = await page.getByRole("button", { name: "PLAY", exact: true }).boundingBox();
+  const liteColumnBox = await page.getByRole("button", { name: "LITE", exact: true }).boundingBox();
+  expect(litePlayBox).not.toBeNull();
+  expect(liteColumnBox).not.toBeNull();
+  expect(litePlayBox!.x).toBe(liteColumnBox!.x);
+  expect(litePlayBox!.width).toBe(liteColumnBox!.width);
+  expect(litePlayBox!.y - (liteColumnBox!.y + liteColumnBox!.height)).toBeCloseTo(56, 2);
+
   await page.getByRole("button", { name: "LITE+", exact: true }).click();
   const featureNames = ["DIVIDEND", "FEES", "SELL ORDER"];
   for (const feature of featureNames) {
@@ -585,6 +924,22 @@ test("Home exposes only Trainer LITE and LITE+ through one button language", asy
   await expect(page.getByRole("button", { name: "PLAY", exact: true })).toHaveCount(0);
 
   await page.getByRole("button", { name: "DIVIDEND", exact: true }).click();
+  const litePlusPlayBox = await page.getByRole("button", { name: "PLAY", exact: true }).boundingBox();
+  const litePlusModeBox = await page.getByRole("button", { name: "LITE+", exact: true }).boundingBox();
+  const feesBox = await page.getByRole("button", { name: "FEES", exact: true }).boundingBox();
+  const litePlusColumnBox = await page.getByRole("button", { name: "DIVIDEND", exact: true }).boundingBox();
+  const sellOrderBox = await page.getByRole("button", { name: "SELL ORDER", exact: true }).boundingBox();
+  expect(litePlusPlayBox).not.toBeNull();
+  expect(litePlusModeBox).not.toBeNull();
+  expect(feesBox).not.toBeNull();
+  expect(litePlusColumnBox).not.toBeNull();
+  expect(sellOrderBox).not.toBeNull();
+  expect(litePlusPlayBox!.x).toBe(litePlusColumnBox!.x);
+  expect(litePlusPlayBox!.width).toBe(litePlusColumnBox!.width);
+  expect(feesBox!.x).toBeLessThan(litePlusColumnBox!.x);
+  expect(litePlusColumnBox!.x).toBeLessThan(sellOrderBox!.x);
+  expect(litePlusColumnBox!.y - (litePlusModeBox!.y + litePlusModeBox!.height)).toBeCloseTo(56, 2);
+  expect(litePlusPlayBox!.y - (litePlusColumnBox!.y + litePlusColumnBox!.height)).toBeCloseTo(56, 2);
   const controls = page.getByRole("button");
   const buttonGeometry = await controls.evaluateAll((buttons) => buttons.map((button) => {
     const box = button.getBoundingClientRect();
@@ -615,6 +970,471 @@ test("Home exposes only Trainer LITE and LITE+ through one button language", asy
     dividends: true,
     sell_order: false,
   } });
+});
+
+test("collapsed stacks keep their bottom anchor and small-card share typography is invariant", async ({ page, request }) => {
+  await page.setViewportSize({ width: 1_280, height: 900 });
+  const fixture = await openFixtureGame(page, request, (base) => {
+    const stock = fixtureStock(base, 0);
+    return {
+      ...base,
+      revision: 901,
+      phase: "supply",
+      phase_step: "supply",
+      active_player_id: 0,
+      checkpoint: null,
+      decision_batch: null,
+      legal_actions: [],
+      pending_decision: {
+        kind: "supply",
+        prompt: "SUPPLY",
+        selected_stockpile_id: null,
+        selected_action_effect: null,
+        company_id: null,
+      },
+      stockpiles: Array.from({ length: 4 }, (_, pileId) => ({
+        ...base.stockpiles[pileId],
+        stockpile_id: pileId,
+        cards_bottom_to_top: Array.from({ length: pileId + 1 }, () => ({ ...stock })),
+        bid: null,
+        locked: false,
+        purchaser_id: null,
+        resolved: false,
+      })),
+      private: {
+        ...base.private,
+        holdings: [{
+          company_id: 0,
+          company: stock.company,
+          shares_thousands: 3,
+          price_dollars_per_share: base.companies[0].price_dollars_per_share,
+          market_value_thousands: 3 * base.companies[0].price_dollars_per_share,
+        }],
+      },
+      supply_batch: {
+        cards: [
+          { card_ref: "active-stock", card: stock },
+          { card_ref: "active-stock-two", card: { ...stock } },
+        ],
+        plans: [],
+      },
+      terminal_results: null,
+    };
+  });
+  expect(fixture.view.stockpiles.map((pile) => pile.cards_bottom_to_top.length)).toEqual([1, 2, 3, 4]);
+
+  const geometry = await page.locator("article[data-stockpile-id]").evaluateAll((piles) => piles.map((pile) => {
+    const pileBox = pile.getBoundingClientRect();
+    const bottom = pile.querySelector<HTMLElement>('[data-stack-bottom="true"]')!;
+    const top = pile.querySelector<HTMLElement>('[data-stack-top="true"]')!;
+    const bottomBox = bottom.getBoundingClientRect();
+    const topBox = top.getBoundingClientRect();
+    return {
+      depth: pile.querySelectorAll("[data-stack-card]").length,
+      bottomX: Math.round((bottomBox.x - pileBox.x) * 100) / 100,
+      bottomY: Math.round((bottomBox.y - pileBox.y) * 100) / 100,
+      topDx: Math.round((topBox.x - bottomBox.x) * 100) / 100,
+      topDy: Math.round((topBox.y - bottomBox.y) * 100) / 100,
+    };
+  }));
+  expect(geometry.map((item) => item.depth)).toEqual([1, 2, 3, 4]);
+  for (const item of geometry) {
+    // CSS grid tracks can land on adjacent browser subpixels. The physical
+    // anchor is invariant when both axes stay within one twentieth of a px.
+    expect(Math.abs(item.bottomX - geometry[0].bottomX), JSON.stringify(geometry)).toBeLessThanOrEqual(0.05);
+    expect(Math.abs(item.bottomY - geometry[0].bottomY), JSON.stringify(geometry)).toBeLessThanOrEqual(0.05);
+  }
+  const stepX = geometry[1].topDx;
+  const stepY = geometry[1].topDy;
+  expect(stepX).toBeGreaterThan(0);
+  expect(stepY).toBeGreaterThan(0);
+  for (const item of geometry) {
+    expect(item.topDx).toBeCloseTo(stepX * (item.depth - 1), 2);
+    expect(item.topDy).toBeCloseTo(stepY * (item.depth - 1), 2);
+  }
+
+  const activeValue = page.locator('[data-card-scale="active"] [data-card-value]').first();
+  const portfolioValue = page.locator('[data-card-scale="portfolio"] [data-card-value]').first();
+  await expect(activeValue).toHaveText("1K");
+  await expect(portfolioValue).toHaveText("3K");
+  const typography = await Promise.all([activeValue, portfolioValue].map((locator) => locator.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      family: style.fontFamily,
+      size: style.fontSize,
+      weight: style.fontWeight,
+      lineHeight: style.lineHeight,
+      letterSpacing: style.letterSpacing,
+    };
+  })));
+  expect(typography[0]).toEqual(typography[1]);
+});
+
+test("Selling shows the current holding card and only its HOLD and SELL choices", async ({ page, request }) => {
+  const fixture = await openFixtureGame(page, request, (base) => {
+    const company = base.companies[5];
+    return {
+      ...base,
+      revision: 902,
+      phase: "selling",
+      phase_step: "selling",
+      active_player_id: 0,
+      checkpoint: null,
+      supply_batch: null,
+      decision_batch: null,
+      pending_decision: {
+        kind: "sell",
+        prompt: "SELL",
+        selected_stockpile_id: null,
+        selected_action_effect: null,
+        company_id: company.company_id,
+      },
+      private: {
+        ...base.private,
+        holdings: [{
+          company_id: company.company_id,
+          company: company.name,
+          shares_thousands: 3,
+          price_dollars_per_share: company.price_dollars_per_share,
+          market_value_thousands: 3 * company.price_dollars_per_share,
+        }],
+      },
+      legal_actions: [
+        {
+          action_id: 700,
+          control: "sell",
+          label: `Hold ${company.name}`,
+          target_id: `company:${company.company_id}`,
+          amount_thousands: 0,
+          direction: null,
+          sale_preview: {
+            company_id: company.company_id,
+            company: company.name,
+            shares_thousands: 0,
+            price_dollars_per_share: company.price_dollars_per_share,
+            gross_value_thousands: 0,
+            resulting_shares_thousands: 3,
+          },
+        },
+        {
+          action_id: 701,
+          control: "sell",
+          label: `Sell 1K ${company.name}`,
+          target_id: `company:${company.company_id}`,
+          amount_thousands: company.price_dollars_per_share,
+          direction: null,
+          sale_preview: {
+            company_id: company.company_id,
+            company: company.name,
+            shares_thousands: 1,
+            price_dollars_per_share: company.price_dollars_per_share,
+            gross_value_thousands: company.price_dollars_per_share,
+            resulting_shares_thousands: 2,
+          },
+        },
+      ],
+      terminal_results: null,
+    };
+  });
+  const companyId = fixture.view.pending_decision.company_id!;
+  const company = fixture.view.companies.find((candidate) => candidate.company_id === companyId)!;
+  const dock = page.getByLabel("Action dock");
+  const sellingCard = dock.locator(`[data-selling-company-id="${companyId}"]`);
+  await expect(sellingCard).toHaveCount(1);
+  await expect(sellingCard.locator('[data-card-scale="active"]')).toHaveAttribute(
+    "aria-label",
+    `${company.display_name} holding 3K shares`,
+  );
+  await expect(sellingCard.locator("[data-card-value]")).toHaveText("3K");
+  await expect(dock.getByText("HOLD", { exact: true })).toHaveCount(1);
+  await expect(dock.getByText("SELL 1K", { exact: true })).toHaveCount(1);
+  await expect(dock.locator('[data-selling-company-id]:not([data-selling-company-id="5"])')).toHaveCount(0);
+});
+
+test("Market keeps the latest delta per company until a real new round", async ({ page, request }) => {
+  const fixture = await openFixtureGame(page, request, (base) => ({
+    ...base,
+    revision: 903,
+    companies: base.companies.map((company) => ({
+      ...company,
+      price_delta_dollars_per_share: company.company_id === 0 ? 2 : company.company_id === 1 ? -1 : null,
+    })),
+  }));
+  const delta = (companyId: number) => page.locator(`[data-market-price-delta="${companyId}"]`);
+  await expect(delta(0)).toHaveText("↑2");
+  await expect(delta(1)).toHaveText("↓1");
+
+  await page.waitForTimeout(2_600);
+  await expect(delta(0)).toHaveText("↑2");
+  await expect(delta(1)).toHaveText("↓1");
+
+  const latestA: GameView = {
+    ...fixture.view,
+    revision: 904,
+    phase: "selling",
+    phase_step: "selling",
+    companies: fixture.view.companies.map((company) => ({
+      ...company,
+      price_delta_dollars_per_share: company.company_id === 0 ? -3 : company.company_id === 1 ? -1 : null,
+    })),
+  };
+  await fixture.update(latestA);
+  await expect(delta(0)).toHaveText("↓3");
+  await expect(delta(1)).toHaveText("↓1");
+
+  const zeroAAndNewC: GameView = {
+    ...latestA,
+    revision: 905,
+    phase: "movement",
+    phase_step: "movement",
+    companies: latestA.companies.map((company) => ({
+      ...company,
+      price_delta_dollars_per_share: company.company_id === 0 ? null : company.company_id === 1 ? -1 : company.company_id === 2 ? 4 : null,
+    })),
+  };
+  await fixture.update(zeroAAndNewC);
+  await expect(delta(0)).toHaveCount(0);
+  await expect(delta(1)).toHaveText("↓1");
+  await expect(delta(2)).toHaveText("↑4");
+
+  const nextRound: GameView = {
+    ...zeroAAndNewC,
+    revision: 906,
+    round: zeroAAndNewC.round + 1,
+    phase: "supply",
+    phase_step: "supply",
+    companies: zeroAAndNewC.companies.map((company) => ({
+      ...company,
+      price_delta_dollars_per_share: null,
+    })),
+  };
+  await fixture.update(nextRound);
+  await expect(page.locator("[data-market-price-delta]")).toHaveCount(0);
+});
+
+test("Market and Players reserve fixed delta columns whether values are empty or populated", async ({ page, request }) => {
+  await page.setViewportSize({ width: 1_280, height: 900 });
+  const fixture = await openFixtureGame(page, request, (base) => ({
+    ...base,
+    revision: 907,
+    companies: base.companies.map((company) => ({
+      ...company,
+      price_dollars_per_share: company.company_id === 0 ? 3 : company.company_id === 1 ? 47 : company.company_id === 2 ? 109 : company.price_dollars_per_share,
+      price_delta_dollars_per_share: company.company_id === 0 ? null : company.company_id === 1 ? -12 : company.company_id === 2 ? 4 : null,
+    })),
+    players: base.players.map((player) => player.role === "human" ? {
+      ...player,
+      cash_thousands: 3,
+      cash_delta_thousands: null,
+      position_value_thousands: 141,
+      position_delta_thousands: 6,
+    } : {
+      ...player,
+      cash_thousands: 99,
+      cash_delta_thousands: -4,
+    }),
+  }));
+
+  type AnchorSnapshot = {
+    market: Array<{ key: string; priceRight: number; deltaX: number; deltaWidth: number }>;
+    players: Array<{ key: string; valueRight: number; deltaX: number; deltaWidth: number }>;
+  };
+  const anchors = () => page.evaluate<AnchorSnapshot>(() => ({
+    market: Array.from(document.querySelectorAll<HTMLElement>("[data-company-id]")).map((row) => {
+      const priceSlot = row.querySelector<HTMLElement>("[data-market-price-value]")!;
+      const deltaSlot = row.querySelector<HTMLElement>("[data-market-delta-slot]")!;
+      const priceBox = priceSlot.getBoundingClientRect();
+      const deltaBox = deltaSlot.getBoundingClientRect();
+      return {
+        key: row.dataset.companyId!,
+        priceRight: priceBox.right,
+        deltaX: deltaBox.x,
+        deltaWidth: deltaBox.width,
+      };
+    }),
+    players: Array.from(document.querySelectorAll<HTMLElement>("[data-player-metric]")).map((row) => {
+      const player = row.closest<HTMLElement>("[data-player-role]")!;
+      const valueSlot = row.querySelector<HTMLElement>("[data-player-value-slot]")!;
+      const deltaSlot = row.querySelector<HTMLElement>("[data-player-delta-slot]")!;
+      const valueBox = valueSlot.getBoundingClientRect();
+      const deltaBox = deltaSlot.getBoundingClientRect();
+      return {
+        key: `${player.dataset.playerRole}:${row.dataset.playerMetric}`,
+        valueRight: valueBox.right,
+        deltaX: deltaBox.x,
+        deltaWidth: deltaBox.width,
+      };
+    }),
+  }));
+  const assertAligned = (snapshot: AnchorSnapshot) => {
+    expect(new Set(snapshot.market.map((item) => item.priceRight)).size).toBe(1);
+    expect(new Set(snapshot.market.map((item) => item.deltaX)).size).toBe(1);
+    expect(new Set(snapshot.market.map((item) => item.deltaWidth)).size).toBe(1);
+    expect(new Set(snapshot.players.map((item) => item.valueRight)).size).toBe(1);
+    expect(new Set(snapshot.players.map((item) => item.deltaX)).size).toBe(1);
+    expect(new Set(snapshot.players.map((item) => item.deltaWidth)).size).toBe(1);
+  };
+
+  await expect(page.locator('[data-market-delta-slot="0"]')).toBeEmpty();
+  await expect(page.locator('[data-market-delta-slot="1"]')).toHaveText("↓12");
+  await expect(page.locator('[data-player-role="human"] [data-player-metric="cash"] [data-player-delta-slot]')).toBeEmpty();
+  const before = await anchors();
+  assertAligned(before);
+
+  const next: GameView = {
+    ...fixture.view,
+    revision: 908,
+    companies: fixture.view.companies.map((company) => ({
+      ...company,
+      price_dollars_per_share: company.company_id === 0 ? 123 : company.company_id === 1 ? 4 : company.price_dollars_per_share,
+      price_delta_dollars_per_share: company.company_id === 0 ? 8 : company.company_id === 1 ? null : company.company_id === 2 ? -2 : null,
+    })),
+    players: fixture.view.players.map((player) => player.role === "human" ? {
+      ...player,
+      cash_thousands: 123,
+      cash_delta_thousands: 17,
+      position_value_thousands: 4,
+      position_delta_thousands: null,
+    } : {
+      ...player,
+      cash_thousands: 7,
+      cash_delta_thousands: null,
+    }),
+  };
+  await fixture.update(next);
+  await expect(page.locator('[data-market-delta-slot="0"]')).toHaveText("↑8");
+  await expect(page.locator('[data-market-delta-slot="1"]')).toBeEmpty();
+  await expect(page.locator('[data-player-role="human"] [data-player-metric="cash"] [data-player-delta-slot]')).toHaveText("+$17K");
+  await expect(page.locator('[data-player-role="human"] [data-player-metric="position"] [data-player-delta-slot]')).toBeEmpty();
+  const after = await anchors();
+  assertAligned(after);
+
+  for (const prior of before.market) {
+    const current = after.market.find((item) => item.key === prior.key)!;
+    expect(Math.abs(current.priceRight - prior.priceRight), `${prior.key}:priceRight`).toBeLessThanOrEqual(0.05);
+    expect(Math.abs(current.deltaX - prior.deltaX), `${prior.key}:deltaX`).toBeLessThanOrEqual(0.05);
+    expect(Math.abs(current.deltaWidth - prior.deltaWidth), `${prior.key}:deltaWidth`).toBeLessThanOrEqual(0.05);
+  }
+  for (const prior of before.players) {
+    const current = after.players.find((item) => item.key === prior.key)!;
+    expect(Math.abs(current.valueRight - prior.valueRight), `${prior.key}:valueRight`).toBeLessThanOrEqual(0.05);
+    expect(Math.abs(current.deltaX - prior.deltaX), `${prior.key}:deltaX`).toBeLessThanOrEqual(0.05);
+    expect(Math.abs(current.deltaWidth - prior.deltaWidth), `${prior.key}:deltaWidth`).toBeLessThanOrEqual(0.05);
+  }
+});
+
+test("Bankruptcy stays on Round Result until CONTINUE, then reveals the reset market", async ({ page, request }) => {
+  await page.setViewportSize({ width: 1_280, height: 900 });
+  let afterAcknowledgement!: GameView;
+  const fixture = await openFixtureGame(page, request, (base) => {
+    const company = base.companies[0];
+    afterAcknowledgement = {
+      ...base,
+      revision: 910,
+      round: base.round + 1,
+      phase: "supply",
+      phase_step: "supply",
+      checkpoint: null,
+      companies: base.companies.map((candidate) => candidate.company_id === company.company_id ? {
+        ...candidate,
+        price_dollars_per_share: 5,
+        price_delta_dollars_per_share: null,
+      } : { ...candidate, price_delta_dollars_per_share: null }),
+      private: {
+        ...base.private,
+        holdings: base.private.holdings.map((holding) => holding.company_id === company.company_id ? {
+          ...holding,
+          shares_thousands: 0,
+          price_dollars_per_share: 5,
+          market_value_thousands: 0,
+        } : holding),
+      },
+      recent_events: [],
+    };
+    return {
+      ...base,
+      revision: 909,
+      phase: "ROUND_RESULT",
+      phase_step: "acknowledge",
+      active_player_id: null,
+      companies: base.companies.map((candidate) => candidate.company_id === company.company_id ? {
+        ...candidate,
+        price_dollars_per_share: 0,
+        price_delta_dollars_per_share: -1,
+      } : candidate),
+      private: {
+        ...base.private,
+        holdings: base.private.holdings.map((holding) => holding.company_id === company.company_id ? {
+          ...holding,
+          shares_thousands: 1,
+          price_dollars_per_share: 0,
+          market_value_thousands: 0,
+        } : holding),
+      },
+      pending_decision: {
+        kind: "acknowledge",
+        prompt: "CONTINUE",
+        selected_stockpile_id: null,
+        selected_action_effect: null,
+        company_id: null,
+      },
+      legal_actions: [],
+      supply_batch: null,
+      decision_batch: null,
+      checkpoint: {
+        checkpoint_id: "bankruptcy-round-result",
+        kind: "round_result",
+        round: base.round,
+      },
+      recent_events: [
+        ...base.recent_events,
+        {
+          event_id: 909,
+          event_type: "bankruptcy",
+          cause: "market_forecast",
+          round: base.round,
+          company_id: company.company_id,
+          prior_price_dollars_per_share: 1,
+          price_delta: -1,
+          resulting_price_dollars_per_share: 0,
+          forecast: -1,
+          cash_effect_thousands: null,
+          direction: "down",
+        },
+      ],
+      terminal_results: null,
+    };
+  });
+
+  const companyId = 0;
+  const bankruptRow = page.locator(`[data-bankrupt-company="${companyId}"]`);
+  await expect(bankruptRow).toHaveCount(1);
+  await expect(bankruptRow.locator(`[data-market-company-name="${companyId}"]`)).toHaveAttribute("data-white-out", "true");
+  await expect(bankruptRow.locator(`[data-market-price-value="${companyId}"]`)).toHaveAttribute("data-white-out", "true");
+  await expect(bankruptRow.locator(`[data-market-price-value="${companyId}"]`)).toHaveText("$0 / SHARE");
+  await expect(bankruptRow.locator(`[data-market-delta-slot="${companyId}"]`)).toHaveText("↓1");
+  await expect(bankruptRow.locator(`[data-market-delta-slot="${companyId}"]`)).not.toHaveAttribute("data-white-out", "true");
+  await expect(page.locator(`[data-portfolio-company-id="${companyId}"]`)).toHaveAttribute("data-white-out", "true");
+
+  let acknowledgementBody: unknown;
+  await page.route(`**/api/v2/games/${fixture.gameId}/acknowledgements`, async (route) => {
+    acknowledgementBody = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      headers: { "Cache-Control": "no-store" },
+      body: JSON.stringify(afterAcknowledgement),
+    });
+  });
+  await page.locator('[data-context-action="continue"]').click();
+  await expect(page.locator(`[data-bankrupt-company="${companyId}"]`)).toHaveCount(0);
+  await expect(page.locator(`[data-market-price-value="${companyId}"]`)).toHaveText("$5 / SHARE");
+  await expect(page.locator(`[data-market-delta-slot="${companyId}"]`)).toBeEmpty();
+  await expect(page.locator(`[data-portfolio-company-id="${companyId}"]`)).toHaveCount(0);
+  expect(acknowledgementBody).toEqual({
+    checkpoint_id: "bankruptcy-round-result",
+    expected_revision: 909,
+  });
 });
 
 test("one token opens fixed Research, exact cards, and independently inspectable stacks", async ({ page, request }) => {
@@ -786,7 +1606,7 @@ test("RESIGN is persistent, cancellable, and returns home only after confirmatio
   }
 });
 
-test("default seed 101 completes six rounds through Demand and Round acknowledgements", async ({ page, request }) => {
+test("default seed 101 completes two rounds through Demand and Round acknowledgements", async ({ page, request }) => {
   test.setTimeout(180_000);
   const harness = await openGame(page, request, defaultOptions, 101);
   try {
@@ -801,7 +1621,7 @@ test("default seed 101 completes six rounds through Demand and Round acknowledge
     expect(harness.coverage.sawLocalBidStep).toBe(true);
     expect([...harness.coverage.eventTypes].some((event) => event.includes("market"))).toBe(true);
 
-    expect(harness.coverage.demandPurchasers.size).toBe(6);
+    expect(harness.coverage.demandPurchasers.size).toBe(2);
     for (const purchasers of harness.coverage.demandPurchasers.values()) {
       expect(purchasers).toHaveLength(4);
       expect(purchasers.filter((playerId) => playerId === 0)).toHaveLength(2);
@@ -814,6 +1634,10 @@ test("default seed 101 completes six rounds through Demand and Round acknowledge
     expect(harness.coverage.sawDemandWhiteOut).toBe(true);
     expect(harness.coverage.sawResearchWhiteOut).toBe(true);
     expect(harness.coverage.sawDeduplicatedSales).toBe(true);
+    expect(harness.coverage.sawDemandMetricSettlement).toBe(true);
+    expect(harness.coverage.sawDemandMetricPersistence).toBe(true);
+    expect(harness.coverage.sawIndependentMetricPreservation).toBe(true);
+    expect(harness.coverage.sawNewRoundMetricClear).toBe(true);
 
     await expect(page.getByText("WINNER", { exact: true })).toHaveCount(0);
     const chart = page.getByTestId("terminal-chart");
@@ -859,7 +1683,11 @@ test("all-options seed 2 renders Impact, ordinary prices above ten, and reaches 
     expect(harness.coverage.causes).toContain("market_impact");
     expect(harness.coverage.maxPrice).toBeGreaterThan(10);
     expect(harness.coverage.renderedPriceAboveTen).toBe(true);
-    expect(harness.coverage.demandPurchasers.size).toBe(6);
+    expect(harness.coverage.demandPurchasers.size).toBe(2);
+    expect(harness.coverage.sawSaleMetricSettlement).toBe(true);
+    expect(harness.coverage.sawHoldMetricClear).toBe(true);
+    expect(harness.coverage.sawIndependentMetricPreservation).toBe(true);
+    expect(harness.coverage.sawNewRoundMetricClear).toBe(true);
   } finally {
     await awaitAudits(harness);
   }

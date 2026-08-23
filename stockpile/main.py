@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import ipaddress
+import json
 import math
 from pathlib import Path
 import sys
@@ -65,6 +66,19 @@ def _positive_float(value: str) -> float:
     if not math.isfinite(parsed) or parsed <= 0:
         raise argparse.ArgumentTypeError("max-seconds must be positive and finite")
     return parsed
+
+
+def _unit_interval_float(name: str):
+    def parse(value: str) -> float:
+        try:
+            parsed = float(value)
+        except ValueError as error:
+            raise argparse.ArgumentTypeError(f"{name} must be a number") from error
+        if not math.isfinite(parsed) or not 0.0 < parsed <= 1.0:
+            raise argparse.ArgumentTypeError(f"{name} must be in (0, 1]")
+        return parsed
+
+    return parse
 
 
 def _named_positive_integer(name: str):
@@ -220,14 +234,37 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="INT",
         help="local API port (default: 8000)",
     )
+    play_parser.add_argument(
+        "--policy",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Deep CFR policy.pt for the computer seat, or 'random' for the "
+            "uniform placeholder"
+        ),
+    )
+    play_parser.add_argument(
+        "--run",
+        type=_named_positive_integer("run"),
+        default=None,
+        metavar="INT",
+        help="managed Deep CFR run whose round_02 policy.pt the computer should use",
+    )
     analyze_parser = commands.add_parser(
         "analyze",
-        help="analyze sampled training regret",
+        help="analyze a saved Deep CFR run",
         description=(
-            "Analyze the sampled average regret recorded by one Deep CFR run. "
-            "Select the run either by its output directory or by mode and run number."
+            "Report stored policy evaluation, learning-curve history, or sampled "
+            "regret for one Deep CFR run. Select the run either by its output "
+            "directory or by mode and run number."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    analyze_parser.add_argument(
+        "--method",
+        choices=("evaluation", "regret", "learning-curve"),
+        default="evaluation",
+        help="analysis method",
     )
     analysis_source = analyze_parser.add_argument_group("source")
     analysis_source.add_argument(
@@ -253,9 +290,19 @@ def build_parser() -> argparse.ArgumentParser:
     analyze_parser.add_argument(
         "--confidence",
         type=_confidence_float,
-        default=0.90,
+        default=argparse.SUPPRESS,
         metavar="FLOAT",
-        help="empirical confidence level",
+        help="regret confidence level (regret default: 0.90)",
+    )
+    analyze_parser.add_argument(
+        "--plot",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "learning-curve plot destination "
+            "(default: <run>/analysis/learning_curve.png)"
+        ),
     )
     solve_parser = commands.add_parser(
         "solve",
@@ -354,6 +401,46 @@ def build_parser() -> argparse.ArgumentParser:
         default=100,
         metavar="INT",
         help="seat-swapped evaluation seed pairs after each stage",
+    )
+    training.add_argument(
+        "--until-win-rate",
+        type=_unit_interval_float("until-win-rate"),
+        default=None,
+        metavar="RATE",
+        help=(
+            "keep training past a normal solve until this win rate vs random "
+            "is reached in two consecutive evaluations"
+        ),
+    )
+    training.add_argument(
+        "--eval-every",
+        type=_named_positive_integer("eval-every"),
+        default=None,
+        metavar="TRAVERSALS",
+        help=(
+            "with --until-win-rate, train this many traversals between "
+            "checkpointed evaluations (default: 10000)"
+        ),
+    )
+    training.add_argument(
+        "--eval-games",
+        type=_named_positive_integer("eval-games"),
+        default=None,
+        metavar="INT",
+        help=(
+            "with --until-win-rate, seat-balanced evaluation games per "
+            "checkpoint (default: 2000; must be even)"
+        ),
+    )
+    training.add_argument(
+        "--max-traversals",
+        type=_named_positive_integer("max-traversals"),
+        default=None,
+        metavar="INT",
+        help=(
+            "with --until-win-rate, stop after this many cumulative training "
+            "traversals if the target has not been reached"
+        ),
     )
     training.add_argument(
         "--seed",
@@ -521,14 +608,42 @@ def complexity(
     return 0
 
 
-def play(*, mode: str, host: str, port: int, output: TextIO) -> int:
+def play(
+    *,
+    mode: str,
+    host: str,
+    port: int,
+    output: TextIO,
+    policy: str | None = None,
+    run: int | None = None,
+) -> int:
     """Launch the optional local workstation without importing it elsewhere."""
 
     if mode != interface.ConfigurationMode.LITE.value:
         raise ValueError("the browser interface supports only Stockpile Lite")
+    if policy is not None and run is not None:
+        raise ValueError("play accepts only one of --policy and --run")
     from .web import run_trainer
+    from .web.policy import RANDOM_POLICY_TOKEN, resolve_computer_policy_path
 
-    return int(run_trainer(host=host, port=port, output=output))
+    if policy is not None and policy.strip().casefold() == RANDOM_POLICY_TOKEN:
+        computer_policy = RANDOM_POLICY_TOKEN
+    elif policy is not None:
+        computer_policy = str(resolve_computer_policy_path(policy=policy))
+    elif run is not None:
+        computer_policy = str(
+            resolve_computer_policy_path(mode=mode, run=run)
+        )
+    else:
+        computer_policy = None
+    return int(
+        run_trainer(
+            host=host,
+            port=port,
+            output=output,
+            computer_policy=computer_policy,
+        )
+    )
 
 
 def _analysis_source(arguments: argparse.Namespace) -> Path:
@@ -564,84 +679,356 @@ def _analysis_source(arguments: argparse.Namespace) -> Path:
     ).path
 
 
-def _analysis_number(value: float | int | None) -> str:
+def _analysis_float(value: object, *, label: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{label} must be a number")
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError(f"{label} must be finite")
+    return parsed
+
+
+def _analysis_integer(value: object, *, label: str, minimum: int = 0) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        qualifier = "positive" if minimum == 1 else "nonnegative"
+        raise ValueError(f"{label} must be a {qualifier} integer")
+    return int(value)
+
+
+def _trimmed_decimal(
+    value: float,
+    *,
+    signed: bool = False,
+    places: int = 3,
+) -> str:
+    parsed = _analysis_float(value, label="analysis value")
+    if parsed == 0.0:
+        return "0"
+    absolute = abs(parsed)
+    rendered = f"{absolute:.{places}f}".rstrip("0").rstrip(".")
+    if not rendered or float(rendered) == 0.0:
+        rendered = format(absolute, f".{places}g")
+    if parsed < 0.0:
+        return "-" + rendered
+    return ("+" if signed else "") + rendered
+
+
+def _percentage(value: object) -> str:
+    parsed = _analysis_float(value, label="win rate")
+    if not 0.0 <= parsed <= 1.0:
+        raise ValueError("win rate must be between zero and one")
+    return _trimmed_decimal(parsed * 100.0, places=2) + "%"
+
+
+def _signed_interval(value: object, *, label: str) -> str:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise ValueError(f"{label} must contain two endpoints")
+    lower = _analysis_float(value[0], label=f"{label} lower endpoint")
+    upper = _analysis_float(value[1], label=f"{label} upper endpoint")
+    if lower > upper:
+        raise ValueError(f"{label} endpoints are reversed")
+    return (
+        f"{_trimmed_decimal(lower, signed=True)} to "
+        f"{_trimmed_decimal(upper, signed=True)}"
+    )
+
+
+def _scientific(value: object, *, label: str) -> str:
     if value is None:
         return "N/A"
-    return format(float(value), ".12g")
+    rendered = format(_analysis_float(value, label=label), ".2e")
+    mantissa, exponent = rendered.split("e", maxsplit=1)
+    return f"{mantissa}e{int(exponent)}"
 
 
-def analyze(*, arguments: argparse.Namespace, output: TextIO) -> int:
-    """Compute and persist the requested sampled-regret analysis report."""
+def _scientific_interval(value: object, *, label: str) -> str:
+    if value is None:
+        return "N/A"
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise ValueError(f"{label} must contain two endpoints")
+    lower = _analysis_float(value[0], label=f"{label} lower endpoint")
+    upper = _analysis_float(value[1], label=f"{label} upper endpoint")
+    if lower > upper:
+        raise ValueError(f"{label} endpoints are reversed")
+    return (
+        f"{_scientific(lower, label=label)} to "
+        f"{_scientific(upper, label=label)}"
+    )
 
-    run_dir = _analysis_source(arguments)
 
+def _print_analysis_table(
+    title: str,
+    headers: Sequence[str],
+    rows: Sequence[Sequence[str]],
+    *,
+    output: TextIO,
+) -> None:
+    print(title, file=output)
+    print(file=output)
+    if not rows:
+        print("N/A", file=output)
+        return
+    widths = [
+        max(len(header), *(len(row[index]) for row in rows))
+        for index, header in enumerate(headers)
+    ]
+    print(
+        "  ".join(header.ljust(widths[index]) for index, header in enumerate(headers)),
+        file=output,
+    )
+    for row in rows:
+        print(
+            "  ".join(value.rjust(widths[index]) for index, value in enumerate(row)),
+            file=output,
+        )
+
+
+def _stored_evaluation_rows(run_dir: Path) -> list[tuple[str, ...]]:
+    metrics_path = run_dir / "metrics.jsonl"
+    if not metrics_path.exists():
+        return []
+    if not metrics_path.is_file():
+        raise OSError(f"evaluation metrics path is not a file: {metrics_path}")
+
+    stages: dict[int, tuple[str, ...]] = {}
+    with metrics_path.open("r", encoding="utf-8") as stream:
+        for line_number, raw_line in enumerate(stream, start=1):
+            if not raw_line.strip():
+                continue
+            try:
+                record = json.loads(raw_line)
+            except json.JSONDecodeError as error:
+                raise ValueError(
+                    f"invalid evaluation metrics JSON on line {line_number}"
+                ) from error
+            if not isinstance(record, dict):
+                raise ValueError(
+                    f"evaluation metrics line {line_number} must be an object"
+                )
+            if record.get("kind") != "evaluation":
+                continue
+
+            stage_index = _analysis_integer(
+                record.get("stage_index"),
+                label=f"evaluation stage on line {line_number}",
+            )
+            rounds = _analysis_integer(
+                record.get("rounds"),
+                label=f"evaluation rounds on line {line_number}",
+                minimum=1,
+            )
+            utility = _analysis_float(
+                record.get("trained_seat_mean_utility"),
+                label=f"evaluation mean utility on line {line_number}",
+            )
+            margin = _analysis_float(
+                record.get("mean_final_cash_differential"),
+                label=f"evaluation cash margin on line {line_number}",
+            )
+            row = (
+                str(rounds),
+                _percentage(record.get("win_rate")),
+                _trimmed_decimal(utility, signed=True),
+                _signed_interval(
+                    record.get("trained_seat_utility_ci95"),
+                    label=f"evaluation CL on line {line_number}",
+                ),
+                _trimmed_decimal(margin, signed=True) + "K",
+            )
+            previous = stages.get(stage_index)
+            if previous is not None and previous[0] != row[0]:
+                raise ValueError(
+                    "evaluation stage "
+                    f"{stage_index} has conflicting rounds on line {line_number}"
+                )
+            stages[stage_index] = row
+    return [stages[index] for index in sorted(stages)]
+
+
+class _RegretProgressRenderer:
+    def __init__(self, stream: TextIO) -> None:
+        self.stream = stream
+        try:
+            self.is_tty = bool(stream.isatty())
+        except (AttributeError, OSError):
+            self.is_tty = False
+        self.stage_index: int | None = None
+        self.last_completed = 0
+        self.line_open = False
+        self.rendered = False
+
+    def __call__(self, progress: object) -> None:
+        stage_index = int(getattr(progress, "stage_index"))
+        rounds = int(getattr(progress, "round_count"))
+        completed = int(getattr(progress, "completed_replicates"))
+        total = int(getattr(progress, "total_replicates"))
+        if self.is_tty:
+            self.stream.write(
+                "\rAnalyzing sampled regret: "
+                f"rounds {rounds}, bootstrap {completed}/{total}"
+            )
+            self.stream.flush()
+            self.rendered = True
+            return
+
+        if stage_index != self.stage_index:
+            if self.line_open:
+                self.stream.write("\n")
+            self.stream.write(f"Analyzing sampled regret: rounds {rounds} ")
+            self.stage_index = stage_index
+            self.last_completed = 0
+            self.line_open = True
+            self.rendered = True
+        if completed > self.last_completed:
+            self.stream.write(".")
+            self.last_completed = completed
+        if self.line_open and completed >= total:
+            self.stream.write(" done\n")
+            self.line_open = False
+        self.stream.flush()
+
+    def finish(self) -> None:
+        if self.is_tty and self.rendered:
+            self.stream.write("\n")
+        elif self.line_open:
+            self.stream.write("\n")
+            self.line_open = False
+        if self.rendered:
+            self.stream.flush()
+
+
+def _analyze_evaluation(run_dir: Path, *, output: TextIO) -> int:
+    _print_analysis_table(
+        "Evaluation vs random",
+        ("Rounds", "Win rate", "Mean utility", "CL", "Cash margin"),
+        _stored_evaluation_rows(run_dir),
+        output=output,
+    )
+    return 0
+
+
+def _analyze_regret(
+    run_dir: Path,
+    *,
+    confidence: float,
+    output: TextIO,
+) -> int:
     from .training.regret import analyze_run, write_analysis_report
 
-    report = analyze_run(
-        run_dir,
-        confidence=arguments.confidence,
-        bootstrap_replicates=10_000,
-        seed=0,
-    )
+    progress = _RegretProgressRenderer(sys.stderr)
+    try:
+        report = analyze_run(
+            run_dir,
+            confidence=confidence,
+            bootstrap_replicates=10_000,
+            seed=0,
+            progress=progress,
+        )
+    finally:
+        progress.finish()
+
     availability = report.get("availability", {})
     stages = report.get("stages", ())
     statistics_available = bool(availability.get("available", False))
     telemetry_declared = bool(availability.get("telemetry_declared", False))
     if statistics_available or telemetry_declared:
         write_analysis_report(run_dir, report)
-    if not statistics_available:
-        print("training_average_regret = N/A", file=output)
-        print("confidence_interval = N/A", file=output)
-        return 0
+    rows = []
+    if statistics_available:
+        for stage in stages:
+            point = stage.get("point") or {}
+            intervals = stage.get("confidence_interval") or {}
+            rows.append(
+                (
+                    str(
+                        _analysis_integer(
+                            stage.get("round_count"),
+                            label="regret rounds",
+                            minimum=1,
+                        )
+                    ),
+                    _scientific(
+                        point.get("maximum"),
+                        label="final regret",
+                    ),
+                    _scientific_interval(
+                        intervals.get("maximum"),
+                        label="regret CL",
+                    ),
+                )
+            )
+    _print_analysis_table(
+        "Sampled regret",
+        ("Rounds", "Final regret", "CL"),
+        rows,
+        output=output,
+    )
+    return 0
 
-    if not stages:
-        print("training_average_regret = N/A", file=output)
-        print("confidence_interval = N/A", file=output)
-        return 0
 
+def _analyze_learning_curve(
+    run_dir: Path,
+    *,
+    plot: Path | None,
+    output: TextIO,
+) -> int:
+    from .training.learning_curve import (
+        LEARNING_CURVE_PLOT_NAME,
+        load_learning_curve_history,
+        plot_learning_curve,
+    )
+
+    history = load_learning_curve_history(run_dir)
+    checkpoints = list(history["checkpoints"])
+    checkpoints.sort(key=lambda item: int(item["cumulative_traversals"]))
+    print("Deep CFR learning curve vs random", file=output)
     print(
-        "Analysis: sampled average regret with an empirical confidence interval",
+        "traversals\tscore\tci95_lower\tci95_upper\twins\tlosses\tties",
         file=output,
     )
-    confidence = format(arguments.confidence * 100.0, "g")
-    labels = (
-        ("player_0", "player 0"),
-        ("player_1", "player 1"),
-        ("maximum", "maximum"),
-    )
-    for stage in stages:
+    for checkpoint in checkpoints:
         print(
-            f"Stage {stage['stage_index']} (rounds {stage['round_count']})",
+            f"{checkpoint['cumulative_traversals']}\t"
+            f"{checkpoint['score']:.6f}\t"
+            f"{checkpoint['score_ci95_lower']:.6f}\t"
+            f"{checkpoint['score_ci95_upper']:.6f}\t"
+            f"{checkpoint['wins']}\t"
+            f"{checkpoint['losses']}\t"
+            f"{checkpoint['ties']}",
             file=output,
         )
-        series = stage.get("series") or (
-            {
-                "stage_iteration": stage["last_stage_iteration"],
-                "point": stage["point"],
-                "confidence_interval": stage["confidence_interval"],
-            },
-        )
-        for iteration in series:
-            print(f"  Iteration {iteration['stage_iteration']}", file=output)
-            point = iteration["point"]
-            intervals = iteration["confidence_interval"]
-            for key, label in labels:
-                interval = intervals[key]
-                rendered_interval = (
-                    "N/A"
-                    if interval is None
-                    else "["
-                    + _analysis_number(interval[0])
-                    + ", "
-                    + _analysis_number(interval[1])
-                    + "]"
-                )
-                print(
-                    f"    {label}: estimate={_analysis_number(point[key])}; "
-                    f"{confidence}% CI={rendered_interval}",
-                    file=output,
-                )
+    destination = plot or (run_dir / "analysis" / LEARNING_CURVE_PLOT_NAME)
+    plot_path = plot_learning_curve(history, destination)
+    print(f"Plot: {plot_path}", file=output)
     return 0
+
+
+def analyze(*, arguments: argparse.Namespace, output: TextIO) -> int:
+    """Report the selected stored analysis for one run."""
+
+    method = str(arguments.method)
+    explicit_confidence = getattr(arguments, "confidence", None)
+    if method != "regret" and explicit_confidence is not None:
+        raise ValueError("--confidence requires --method regret")
+    if method != "learning-curve" and getattr(arguments, "plot", None) is not None:
+        raise ValueError("--plot requires --method learning-curve")
+    run_dir = _analysis_source(arguments)
+    if method == "evaluation":
+        return _analyze_evaluation(run_dir, output=output)
+    if method == "regret":
+        confidence = 0.90 if explicit_confidence is None else explicit_confidence
+        return _analyze_regret(
+            run_dir,
+            confidence=_analysis_float(confidence, label="confidence"),
+            output=output,
+        )
+    if method == "learning-curve":
+        return _analyze_learning_curve(
+            run_dir,
+            plot=arguments.plot,
+            output=output,
+        )
+    raise ValueError(f"unknown analyze method: {method}")
 
 
 def solve(
@@ -689,6 +1076,8 @@ def solve(
             raise ValueError("--smoke requires --rounds 1")
         if arguments.curriculum is not None:
             raise ValueError("--smoke uses its fixed one-round curriculum")
+        if arguments.until_win_rate is not None:
+            raise ValueError("--smoke cannot be combined with --until-win-rate")
         curriculum = None
     else:
         # Validate the schedule before reserving a numbered destination.
@@ -763,6 +1152,10 @@ def solve(
             gradient_clip=arguments.gradient_clip,
             checkpoint_every=arguments.checkpoint_every,
             evaluation_pairs=arguments.evaluation_pairs,
+            until_win_rate=arguments.until_win_rate,
+            eval_every_traversals=arguments.eval_every,
+            eval_games=arguments.eval_games,
+            max_traversals=arguments.max_traversals,
             seed=arguments.seed,
             device=arguments.device,
             output_dir=run_ref.output_dir,
@@ -773,6 +1166,16 @@ def solve(
         "(sampled evaluation; no exact exploitability claim)",
         file=output,
     )
+    if training_config.until_win_rate_enabled:
+        print(
+            "Until win rate: "
+            f"{100.0 * float(training_config.until_win_rate):.1f}% vs random "
+            f"(eval every {training_config.eval_every_traversals:,} traversals, "
+            f"{training_config.eval_games:,} games, "
+            f"max {training_config.max_traversals:,} traversals, "
+            f"{training_config.until_win_rate_consecutive} consecutive hits)",
+            file=output,
+        )
     trainer = DeepCFRTrainer(
         training_config,
         base_configuration=configuration,
@@ -803,6 +1206,17 @@ def solve(
     if run_ref.managed:
         update_run_manifest(run_ref, state="completed")
     print(f"Completed rounds: {','.join(map(str, result.completed_rounds))}", file=output)
+    if training_config.until_win_rate_enabled:
+        if result.final_win_rate is not None:
+            print(
+                f"Final win rate vs random: {100.0 * result.final_win_rate:.1f}% "
+                f"after {result.cumulative_traversals:,} traversals"
+                + (" (target reached)" if result.target_reached else ""),
+                file=output,
+            )
+        history_csv = training_config.output_dir / "evaluation_history.csv"
+        if history_csv.is_file():
+            print(f"Evaluation history: {history_csv}", file=output)
     print(f"Full checkpoint: {result.final_checkpoint}", file=output)
     print(f"Inference policy: {result.final_policy}", file=output)
     return 0
@@ -840,6 +1254,8 @@ def main(
                 host=arguments.host,
                 port=arguments.port,
                 output=output,
+                policy=arguments.policy,
+                run=arguments.run,
             )
         except (ValueError, RuntimeError, OSError) as error:
             parser.error(str(error))

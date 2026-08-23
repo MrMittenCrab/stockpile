@@ -13,7 +13,7 @@ const emptyOptions: LiteOptions = {
   sell_order: false,
 };
 
-const featureOrder = ["dividends", "trading_fees", "sell_order"] as const satisfies readonly LiteOptionKey[];
+const featureOrder = ["trading_fees", "dividends", "sell_order"] as const satisfies readonly LiteOptionKey[];
 const featureLabels: Record<(typeof featureOrder)[number], string> = {
   dividends: "DIVIDEND",
   trading_fees: "FEES",
@@ -65,7 +65,7 @@ export function SetupPage({ navigate = (url: string) => window.location.assign(u
         <span>STOCKPILE TRAINER</span>
       </header>
 
-      <form className={styles.setup} onSubmit={submit}>
+      <form className={styles.setup} data-trainer-mode={mode ?? undefined} onSubmit={submit}>
         <section className={styles.modes} aria-label="Trainer mode">
           <TextButton selected={mode === "lite"} onClick={() => setMode("lite")}>LITE</TextButton>
           <TextButton selected={mode === "lite_plus"} onClick={() => setMode("lite_plus")}>LITE+</TextButton>
@@ -73,17 +73,15 @@ export function SetupPage({ navigate = (url: string) => window.location.assign(u
 
         {mode === "lite_plus" && (
           <section className={styles.features} aria-label="Lite plus features">
-            <div className={styles.featureGrid}>
-              {featureOrder.filter((key) => setup?.options.some((option) => option.key === key)).map((key) => (
-                <TextButton
-                  key={key}
-                  selected={options[key]}
-                  onClick={() => setOptions((current) => ({ ...current, [key]: !current[key] }))}
-                >
-                  {featureLabels[key]}
-                </TextButton>
-              ))}
-            </div>
+            {featureOrder.filter((key) => setup?.options.some((option) => option.key === key)).map((key) => (
+              <TextButton
+                key={key}
+                selected={options[key]}
+                onClick={() => setOptions((current) => ({ ...current, [key]: !current[key] }))}
+              >
+                {featureLabels[key]}
+              </TextButton>
+            ))}
           </section>
         )}
 

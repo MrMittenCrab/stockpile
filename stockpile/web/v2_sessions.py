@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections import deque
+from collections import Counter, deque
 from dataclasses import asdict, dataclass, field, is_dataclass
 import hashlib
 import hmac
@@ -20,6 +20,7 @@ from .sessions import COMPANY_PRESENTATION, SessionError
 from .v2_schemas import (
     ActionCardV2,
     BidMarkerV2,
+    BROWSER_ROUND_COUNT,
     CompanyV2,
     ComputerPublicPlayerV2,
     ConfigurationV2,
@@ -125,6 +126,15 @@ class ResolvedAuctionSnapshot:
     markers: tuple[BidMarkerV2, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class BankruptcyPresentationSnapshot:
+    round: int
+    company_id: int
+    prior_price: int
+    human_shares: int
+    presentation_sequence: int
+
+
 @dataclass(slots=True)
 class SealedPlayerPlanV2:
     state: platform.GameState
@@ -159,9 +169,18 @@ class V2GameSession:
     sealed_sale: SealedSaleBufferV2 | None = None
     checkpoint: PresentationCheckpointV2 | None = None
     demand_cash_before: tuple[int, int] | None = None
-    cash_deltas: tuple[int, int] | None = None
-    last_end_position: int = 0
-    position_delta: int | None = None
+    demand_position_before: int | None = None
+    latest_cash_deltas: tuple[int | None, int | None] = (None, None)
+    latest_human_position_delta: int | None = None
+    latest_market_deltas: dict[int, int] = field(default_factory=dict)
+    latest_presentation_event_sequence: int = 0
+    latest_automatic_event_sequence: int = 0
+    bankruptcy_snapshots: dict[int, BankruptcyPresentationSnapshot] = field(
+        default_factory=dict
+    )
+    bankruptcy_event_corrections: dict[
+        int, BankruptcyPresentationSnapshot
+    ] = field(default_factory=dict)
     resolved_auction: ResolvedAuctionSnapshot | None = None
     closed: bool = False
 
@@ -185,7 +204,7 @@ class V2SessionStore:
         configuration = interface.resolve_configuration(
             interface.ConfigurationMode.LITE,
             player_count=2,
-            round_count=6,
+            round_count=BROWSER_ROUND_COUNT,
             hand=False,
             fees=options.trading_fees,
             dividend=options.dividends,
@@ -212,7 +231,6 @@ class V2SessionStore:
             ordered_piles={index: [] for index in range(configuration.rule_set.stockpile_count)},
             bid_tracking_round=state.round,
         )
-        session.last_end_position = self._position_value(state, HUMAN_ID)
         with session.lock:
             self._advance_automatic(session)
         with self._lock:
@@ -226,7 +244,7 @@ class V2SessionStore:
         with self._lock:
             session = self._sessions.get(game_id)
         if session is None:
-            raise SessionError(404, "game_not_found", "Game not found")
+            raise SessionError(404, "game_not_found", "GAME UNAVAILABLE")
         return session
 
     def authenticate(self, game_id: str, token: str | None) -> V2GameSession:
@@ -389,10 +407,19 @@ class V2SessionStore:
                 )
             checkpoint_kind = checkpoint.kind
             session.checkpoint = None
-            session.cash_deltas = None
-            session.position_delta = None
             if checkpoint_kind == "round_result":
+                bankrupt_company_ids = set(session.bankruptcy_snapshots)
+                session.bankruptcy_snapshots.clear()
                 session.resolved_auction = None
+                if not session.state.is_terminal():
+                    self._clear_latest_deltas(session)
+                else:
+                    # Terminal state keeps the final round's unrelated latest
+                    # deltas, but the live post-bankruptcy market has reset to
+                    # $5.  Do not pair that price with the checkpoint's crash
+                    # annotation after its presentation overlay is dismissed.
+                    for company_id in bankrupt_company_ids:
+                        session.latest_market_deltas.pop(company_id, None)
             self._advance_automatic(session)
             session.revision += 1
             return self._build_view(session)
@@ -462,7 +489,12 @@ class V2SessionStore:
                 if not legal:
                     raise RuntimeError("COMPUTER turn has no legal action")
                 action_id = int(
-                    self.policy.choose_action(information, tuple(legal), session.policy_rng)
+                    self.policy.choose_action(
+                        session.state,
+                        information,
+                        tuple(legal),
+                        session.policy_rng,
+                    )
                 )
                 if action_id not in {action.action_id for action in legal}:
                     raise RuntimeError("computer policy returned an illegal action")
@@ -496,7 +528,13 @@ class V2SessionStore:
             }
             for pile in session.state.stockpiles
         }
+        human_holdings = self._human_holdings(session.state)
         session.state.apply_action(selected)
+        self._record_price_events(
+            session,
+            session.state,
+            human_holdings=human_holdings,
+        )
         for pile in session.state.stockpiles:
             prior = before_ids[pile.stockpile_id]
             for card in pile.face_up_cards + pile.face_down_cards:
@@ -520,6 +558,13 @@ class V2SessionStore:
         supply_record = self._pending_supply_record(session, before, action_id)
         session.state = _apply_player_action(
             session.rule_set, before, player_id, action_id
+        )
+        self._record_completed_action(
+            session,
+            before,
+            session.state,
+            player_id=player_id,
+            action_id=action_id,
         )
         if supply_record is not None:
             for pile_id, card_id, face_up in supply_record:
@@ -562,12 +607,6 @@ class V2SessionStore:
     ) -> None:
         self._record_demand_entry(session)
         if before_phase == platform.Phase.DEMAND.value and session.state.phase != before_phase:
-            before_cash = session.demand_cash_before or tuple(
-                int(player.cash) for player in session.state.players
-            )
-            now = tuple(int(player.cash) for player in session.state.players)
-            session.cash_deltas = (now[0] - before_cash[0], now[1] - before_cash[1])
-            session.demand_cash_before = None
             if captured_cards is None:
                 raise RuntimeError("Demand resolved without a safe Stockpile snapshot")
             resolved_information, _legal = platform.observe_game_state(
@@ -623,10 +662,6 @@ class V2SessionStore:
         if session.state.round != before_round or (
             session.state.is_terminal() and before_phase != platform.Phase.TERMINAL.value
         ):
-            current_position = self._position_value(session.state, HUMAN_ID)
-            session.position_delta = current_position - session.last_end_position
-            session.last_end_position = current_position
-            session.cash_deltas = None
             self._clear_ordered_piles(session)
             session.checkpoint = self._checkpoint("round_result", before_round)
         if session.bid_tracking_round != session.state.round:
@@ -643,16 +678,6 @@ class V2SessionStore:
         )
 
     @staticmethod
-    def _record_demand_entry(session: V2GameSession) -> None:
-        if (
-            session.state.phase == platform.Phase.DEMAND.value
-            and session.demand_cash_before is None
-        ):
-            session.demand_cash_before = tuple(
-                int(player.cash) for player in session.state.players
-            )  # type: ignore[assignment]
-
-    @staticmethod
     def _clear_ordered_piles(session: V2GameSession) -> None:
         for cards in session.ordered_piles.values():
             cards.clear()
@@ -664,6 +689,240 @@ class V2SessionStore:
             * state._company_price(company_id)
             for company_id in range(state.rule_set.company_count)
         )
+
+    def _record_completed_action(
+        self,
+        session: V2GameSession,
+        before: platform.GameState,
+        after: platform.GameState,
+        *,
+        player_id: int,
+        action_id: int,
+    ) -> None:
+        """Record only completed, authoritative presentation events.
+
+        Engine transitions that merely choose a card, pile, direction, or
+        target are deliberately ignored.  A completed event replaces the
+        corresponding latest delta even when its result is zero; unrelated
+        metrics retain their existing presentation state.
+        """
+
+        human_holdings = self._human_holdings(before)
+
+        if (
+            before.phase == platform.Phase.DEMAND.value
+            and after.phase != platform.Phase.DEMAND.value
+        ):
+            # The auction is one public settlement for both players.  Bid
+            # payment, acquired shares, and immediately payable fees all land
+            # in this authoritative transition.
+            cash_before = session.demand_cash_before or (
+                int(before.players[HUMAN_ID].cash),
+                int(before.players[COMPUTER_ID].cash),
+            )
+            position_before = (
+                session.demand_position_before
+                if session.demand_position_before is not None
+                else self._position_value(before, HUMAN_ID)
+            )
+            for settled_player in (HUMAN_ID, COMPUTER_ID):
+                self._replace_cash_delta(
+                    session,
+                    settled_player,
+                    int(after.players[settled_player].cash)
+                    - cash_before[settled_player],
+                )
+            self._replace_human_position_delta(
+                session,
+                self._position_value(after, HUMAN_ID)
+                - position_before,
+            )
+            session.demand_cash_before = None
+            session.demand_position_before = None
+        elif (
+            before.phase == platform.Phase.SELLING.value
+            and before.stage == "selling"
+            and session.rule_set.sequential_observable_selling
+        ):
+            # Sequential Selling only presents a cursor when this player has
+            # shares, so both Sell and HOLD are meaningful metric-capable
+            # events.  HOLD therefore clears that player's prior sale delta.
+            preview = platform.preview_sale_action(
+                session.rule_set, before, player_id, action_id
+            )
+            self._replace_cash_delta(
+                session,
+                player_id,
+                int(after.players[player_id].cash)
+                - int(before.players[player_id].cash),
+            )
+            if player_id == HUMAN_ID:
+                human_holdings[preview.company_id] = int(
+                    preview.resulting_represented
+                )
+                self._replace_human_position_delta(
+                    session, -int(preview.gross_value)
+                )
+        elif before.stage == "dividend_claim":
+            # Claim and Waive are both completed cash decisions.  A waived or
+            # fully fee-offset dividend consequently clears the actor's prior
+            # cash delta without disturbing any position delta.
+            self._replace_cash_delta(
+                session,
+                player_id,
+                int(after.players[player_id].cash)
+                - int(before.players[player_id].cash),
+            )
+
+        # A single engine action may synchronously reveal several forecasts.
+        # Process their public records in sequence so every company retains
+        # its own latest result and the last relevant held-stock event wins for
+        # the human position.
+        self._record_price_events(
+            session,
+            after,
+            human_holdings=human_holdings,
+        )
+
+    @staticmethod
+    def _replace_cash_delta(
+        session: V2GameSession, player_id: int, delta: int
+    ) -> None:
+        value = int(delta) or None
+        human, computer = session.latest_cash_deltas
+        if player_id == HUMAN_ID:
+            session.latest_cash_deltas = (value, computer)
+        elif player_id == COMPUTER_ID:
+            session.latest_cash_deltas = (human, value)
+        else:
+            raise RuntimeError(f"unexpected browser player {player_id}")
+
+    @staticmethod
+    def _replace_human_position_delta(
+        session: V2GameSession, delta: int
+    ) -> None:
+        session.latest_human_position_delta = int(delta) or None
+
+    @staticmethod
+    def _human_holdings(state: platform.GameState) -> list[int]:
+        return [
+            int(state._represented_shares(HUMAN_ID, company_id))
+            for company_id in range(state.rule_set.company_count)
+        ]
+
+    def _record_price_events(
+        self,
+        session: V2GameSession,
+        state: platform.GameState,
+        *,
+        human_holdings: Sequence[int] | None = None,
+    ) -> None:
+        effective_human_holdings = (
+            [int(shares) for shares in human_holdings]
+            if human_holdings is not None
+            else self._human_holdings(state)
+        )
+        new_automatic_events = [
+            event
+            for event in state.pending_events
+            if int(event.sequence) > session.latest_automatic_event_sequence
+        ]
+        for event in new_automatic_events:
+            session.latest_automatic_event_sequence = max(
+                session.latest_automatic_event_sequence,
+                int(event.sequence),
+            )
+        bankruptcy_counts = Counter(
+            int(event.payload["company"])
+            for event in new_automatic_events
+            if event.event_type == "bankruptcy"
+        )
+
+        events = platform.get_presentation_events(
+            session.rule_set,
+            state,
+            since_sequence=session.latest_presentation_event_sequence,
+        )
+        for event in events:
+            session.latest_presentation_event_sequence = max(
+                session.latest_presentation_event_sequence,
+                int(event.presentation_sequence),
+            )
+            if event.event_type != "market_movement":
+                continue
+            company_id = int(event.company_id)
+            actual_delta = int(event.actual_delta)
+            requested_delta = event.requested_delta
+            is_bankruptcy = (
+                bankruptcy_counts[company_id] > 0
+                and requested_delta is not None
+                and int(requested_delta) < 0
+                # A bankruptcy reset is the only Lite movement whose actual
+                # result contradicts its requested downward direction.  The
+                # authoritative automatic record above is still required;
+                # this condition merely correlates it to its public record.
+                and actual_delta >= 0
+            )
+            represented = effective_human_holdings[company_id]
+            if is_bankruptcy:
+                bankruptcy_counts[company_id] -= 1
+                prior_price = int(event.prior_price)
+                event_snapshot = BankruptcyPresentationSnapshot(
+                    round=int(event.round),
+                    company_id=company_id,
+                    prior_price=prior_price,
+                    human_shares=represented,
+                    presentation_sequence=int(event.presentation_sequence),
+                )
+                existing = session.bankruptcy_snapshots.get(company_id)
+                session.bankruptcy_snapshots[company_id] = (
+                    event_snapshot
+                    if existing is None or represented > 0
+                    else BankruptcyPresentationSnapshot(
+                        round=event_snapshot.round,
+                        company_id=company_id,
+                        prior_price=event_snapshot.prior_price,
+                        human_shares=existing.human_shares,
+                        presentation_sequence=event_snapshot.presentation_sequence,
+                    )
+                )
+                session.bankruptcy_event_corrections[
+                    event_snapshot.presentation_sequence
+                ] = event_snapshot
+                session.latest_market_deltas[company_id] = -prior_price
+                if represented > 0:
+                    self._replace_human_position_delta(
+                        session, -(represented * prior_price)
+                    )
+                effective_human_holdings[company_id] = 0
+                continue
+            if actual_delta:
+                session.latest_market_deltas[company_id] = actual_delta
+            else:
+                session.latest_market_deltas.pop(company_id, None)
+            if represented > 0:
+                self._replace_human_position_delta(
+                    session, represented * actual_delta
+                )
+
+    @staticmethod
+    def _clear_latest_deltas(session: V2GameSession) -> None:
+        session.latest_cash_deltas = (None, None)
+        session.latest_human_position_delta = None
+        session.latest_market_deltas.clear()
+
+    def _record_demand_entry(self, session: V2GameSession) -> None:
+        if (
+            session.state.phase == platform.Phase.DEMAND.value
+            and session.demand_cash_before is None
+        ):
+            session.demand_cash_before = (
+                int(session.state.players[HUMAN_ID].cash),
+                int(session.state.players[COMPUTER_ID].cash),
+            )
+            session.demand_position_before = self._position_value(
+                session.state, HUMAN_ID
+            )
 
     @staticmethod
     def _is_buffered_selling(session: V2GameSession) -> bool:
@@ -764,7 +1023,12 @@ class V2SessionStore:
             if not legal:
                 raise RuntimeError("COMPUTER sealed-selling plan has no legal action")
             action_id = int(
-                self.policy.choose_action(information, tuple(legal), session.policy_rng)
+                self.policy.choose_action(
+                    plan.state,
+                    information,
+                    tuple(legal),
+                    session.policy_rng,
+                )
             )
             if action_id not in {action.action_id for action in legal}:
                 raise RuntimeError("computer policy returned an illegal sealed-sale action")
@@ -815,10 +1079,19 @@ class V2SessionStore:
         buffer = session.sealed_sale
         if buffer is None:
             return
+        before = session.state
+        human_holdings = self._human_holdings(before)
+        metric_capable = tuple(
+            any(
+                before._represented_shares(player_id, company_id) > 0
+                for company_id in range(session.rule_set.company_count)
+            )
+            for player_id in (HUMAN_ID, COMPUTER_ID)
+        )
         queues = {
             player: deque(plan.action_ids) for player, plan in buffer.plans.items()
         }
-        state = session.state
+        state = before
         while state.phase == platform.Phase.SELLING.value:
             actor = int(state.current_player())
             if actor < 0 or not queues[actor]:
@@ -828,7 +1101,54 @@ class V2SessionStore:
             )
         if any(queue for queue in queues.values()):
             raise RuntimeError("sealed selling plan contains unused actions")
+
+        selling_batch = next(
+            (
+                record
+                for record in reversed(
+                    state.history_records[len(before.history_records) :]
+                )
+                if isinstance(record, Mapping)
+                and record.get("stage") == "selling_batch"
+            ),
+            None,
+        )
+        if selling_batch is None:
+            raise RuntimeError("sealed selling settlement has no batch record")
+        sales = selling_batch.get("sales", {})
+        human_sales = (
+            sales.get(HUMAN_ID, sales.get(str(HUMAN_ID), {}))
+            if isinstance(sales, Mapping)
+            else {}
+        )
+        if not isinstance(human_sales, Mapping):
+            raise RuntimeError("sealed selling batch has malformed human sales")
+        for raw_company, raw_shares in human_sales.items():
+            company_id = int(raw_company)
+            human_holdings[company_id] -= int(raw_shares)
+            if human_holdings[company_id] < 0:
+                raise RuntimeError("sealed selling batch sold unavailable shares")
+
         session.state = state
+        for player_id in (HUMAN_ID, COMPUTER_ID):
+            if metric_capable[player_id]:
+                self._replace_cash_delta(
+                    session,
+                    player_id,
+                    int(state.players[player_id].cash)
+                    - int(before.players[player_id].cash),
+                )
+        if metric_capable[HUMAN_ID]:
+            self._replace_human_position_delta(
+                session,
+                self._position_value(state, HUMAN_ID)
+                - self._position_value(before, HUMAN_ID),
+            )
+        self._record_price_events(
+            session,
+            state,
+            human_holdings=human_holdings,
+        )
         session.sealed_sale = None
 
     @staticmethod
@@ -1284,25 +1604,52 @@ class V2SessionStore:
             supply_batch=supply_batch,
             decision_batch=decision_batch,
             checkpoint=checkpoint,
-            recent_events=self._presentation_events(session.state, round_number),
+            recent_events=self._presentation_events(session, round_number),
             terminal_results=terminal,
         )
+
+    @staticmethod
+    def _checkpoint_bankruptcy_snapshot(
+        session: V2GameSession,
+        company_id: int,
+    ) -> BankruptcyPresentationSnapshot | None:
+        checkpoint = session.checkpoint
+        if checkpoint is None or checkpoint.kind != "round_result":
+            return None
+        snapshot = session.bankruptcy_snapshots.get(company_id)
+        if snapshot is None or snapshot.round != checkpoint.round:
+            return None
+        return snapshot
 
     @staticmethod
     def _companies(
         session: V2GameSession, public: Mapping[str, Any]
     ) -> list[CompanyV2]:
-        return [
-            CompanyV2(
-                company_id=index,
-                symbol=name[:1].upper(),
-                name=name,
-                display_name=COMPANY_PRESENTATION[index][0],
-                pattern=COMPANY_PRESENTATION[index][1],
-                price_dollars_per_share=int(public["prices"][name]),
+        companies: list[CompanyV2] = []
+        for index, name in enumerate(session.rule_set.company_names):
+            bankruptcy = V2SessionStore._checkpoint_bankruptcy_snapshot(
+                session, index
             )
-            for index, name in enumerate(session.rule_set.company_names)
-        ]
+            companies.append(
+                CompanyV2(
+                    company_id=index,
+                    symbol=name[:1].upper(),
+                    name=name,
+                    display_name=COMPANY_PRESENTATION[index][0],
+                    pattern=COMPANY_PRESENTATION[index][1],
+                    price_dollars_per_share=(
+                        0
+                        if bankruptcy is not None
+                        else int(public["prices"][name])
+                    ),
+                    price_delta_dollars_per_share=(
+                        -bankruptcy.prior_price
+                        if bankruptcy is not None
+                        else session.latest_market_deltas.get(index)
+                    ),
+                )
+            )
+        return companies
 
     def _bid_markers(self, session: V2GameSession) -> list[BidMarkerV2]:
         result: list[BidMarkerV2] = []
@@ -1458,8 +1805,6 @@ class V2SessionStore:
         active_player_id: int | None,
         human_plan: SealedPlayerPlanV2 | None,
     ) -> list[HumanPublicPlayerV2 | ComputerPublicPlayerV2]:
-        checkpoint_kind = session.checkpoint.kind if session.checkpoint else None
-        cash_deltas = session.cash_deltas if checkpoint_kind == "demand_result" else None
         human_status = self._player_status(
             HUMAN_ID, active_player_id, session.state, human_plan
         )
@@ -1473,20 +1818,11 @@ class V2SessionStore:
                 player_id=HUMAN_ID,
                 name=PLAYER_NAMES[HUMAN_ID],
                 cash_thousands=human_cash,
-                cash_delta_thousands=(
-                    cash_deltas[HUMAN_ID]
-                    if cash_deltas and cash_deltas[HUMAN_ID] != 0
-                    else None
-                ),
+                cash_delta_thousands=session.latest_cash_deltas[HUMAN_ID],
                 position_value_thousands=self._position_value(
                     session.state, HUMAN_ID
                 ),
-                position_delta_thousands=(
-                    session.position_delta
-                    if checkpoint_kind == "round_result"
-                    and session.position_delta != 0
-                    else None
-                ),
+                position_delta_thousands=session.latest_human_position_delta,
                 active=active_player_id == HUMAN_ID,
                 status=human_status,
                 bid_markers=[item for item in markers if item.player_id == HUMAN_ID],
@@ -1495,11 +1831,7 @@ class V2SessionStore:
                 player_id=COMPUTER_ID,
                 name=PLAYER_NAMES[COMPUTER_ID],
                 cash_thousands=computer_cash,
-                cash_delta_thousands=(
-                    cash_deltas[COMPUTER_ID]
-                    if cash_deltas and cash_deltas[COMPUTER_ID] != 0
-                    else None
-                ),
+                cash_delta_thousands=session.latest_cash_deltas[COMPUTER_ID],
                 active=active_player_id == COMPUTER_ID,
                 status=computer_status,
                 bid_markers=[item for item in markers if item.player_id == COMPUTER_ID],
@@ -1535,10 +1867,17 @@ class V2SessionStore:
     ) -> ViewerPrivateV2:
         holdings = []
         for company_id, name in enumerate(session.rule_set.company_names):
-            regular = int(information.owned_stocks["regular"][name])
-            split = int(information.owned_stocks["split"][name])
-            represented = regular + 2 * split
-            price = state._company_price(company_id)
+            bankruptcy = self._checkpoint_bankruptcy_snapshot(
+                session, company_id
+            )
+            if bankruptcy is not None:
+                represented = bankruptcy.human_shares
+                price = 0
+            else:
+                regular = int(information.owned_stocks["regular"][name])
+                split = int(information.owned_stocks["split"][name])
+                represented = regular + 2 * split
+                price = state._company_price(company_id)
             holdings.append(
                 HoldingV2(
                     company_id=company_id,
@@ -1704,8 +2043,9 @@ class V2SessionStore:
 
     @staticmethod
     def _presentation_events(
-        state: platform.GameState, display_round: int
+        session: V2GameSession, display_round: int
     ) -> list[PublicEventV2]:
+        state = session.state
         events: list[PublicEventV2] = []
         raw_events = [
             raw
@@ -1714,6 +2054,20 @@ class V2SessionStore:
         ][-MAX_PUBLIC_EVENTS:]
         for index, raw in enumerate(raw_events):
             data = asdict(raw) if is_dataclass(raw) else dict(raw)
+            event_id = int(
+                data.get(
+                    "presentation_sequence", data.get("sequence", index + 1)
+                )
+            )
+            bankruptcy = session.bankruptcy_event_corrections.get(event_id)
+            if bankruptcy is not None:
+                data = {
+                    **data,
+                    "event_type": "bankruptcy",
+                    "prior_price": bankruptcy.prior_price,
+                    "actual_delta": -bankruptcy.prior_price,
+                    "resulting_price": 0,
+                }
             actual_delta = data.get("actual_delta")
             requested_delta = data.get("requested_delta")
             delta = actual_delta if actual_delta is not None else requested_delta
@@ -1723,11 +2077,7 @@ class V2SessionStore:
             forecast = _normalise_forecast(data.get("forecast"))
             events.append(
                 PublicEventV2(
-                    event_id=int(
-                        data.get(
-                            "presentation_sequence", data.get("sequence", index + 1)
-                        )
-                    ),
+                    event_id=event_id,
                     event_type=str(data.get("event_type", data.get("cause", "market"))),
                     cause=(
                         None if data.get("cause") is None else str(data.get("cause"))

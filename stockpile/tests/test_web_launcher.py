@@ -199,7 +199,7 @@ class LauncherTests(unittest.TestCase):
         )
         self.assertEqual(
             output.getvalue(),
-            "Starting Stockpile Trainer...\n\nhttp://127.0.0.1:5173\n",
+            "Starting Stockpile Trainer...\nComputer policy: deep_cfr\n\nhttp://127.0.0.1:5173\n",
         )
         shutdown.assert_called_once_with(children, timeout=3.0)
         open_browser.assert_not_called()
@@ -256,7 +256,7 @@ class LauncherTests(unittest.TestCase):
 
         self.assertEqual(
             output.getvalue(),
-            "Starting Stockpile Trainer...\n\nhttp://127.0.0.1:5173\n",
+            "Starting Stockpile Trainer...\nComputer policy: deep_cfr\n\nhttp://127.0.0.1:5173\n",
         )
         shutdown.assert_called_once_with(children, timeout=3.0)
 

@@ -20,7 +20,7 @@ iterations nor individual observations are resampled.
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 import hashlib
 import hmac
@@ -79,6 +79,18 @@ _PAYLOAD_NAMES = (
 _ALL_ARRAY_NAMES = frozenset((*_PAYLOAD_NAMES, _METADATA_JSON))
 
 FloatArray: TypeAlias = NDArray[np.float64]
+
+
+@dataclass(frozen=True, slots=True)
+class RegretAnalysisProgress:
+    """One deterministic progress observation from offline regret analysis."""
+
+    stage_index: int
+    round_count: int
+    stage_number: int
+    stage_count: int
+    completed_replicates: int
+    total_replicates: int
 
 
 class RegretFormatError(ValueError):
@@ -1454,6 +1466,9 @@ def _stage_report(
     rng: np.random.Generator,
     replicates: int,
     confidence: float,
+    stage_number: int,
+    stage_count: int,
+    progress: Callable[[RegretAnalysisProgress], None] | None,
 ) -> dict[str, Any]:
     ordered = tuple(sorted(records, key=lambda value: value.stage_iteration))
     first = ordered[0]
@@ -1516,6 +1531,17 @@ def _stage_report(
     point_series: tuple[FloatArray, FloatArray] | None = None
     replicate_series: tuple[FloatArray, FloatArray] | None = None
     if contiguous_count:
+        if progress is not None:
+            progress(
+                RegretAnalysisProgress(
+                    stage_index=first.stage_index,
+                    round_count=first.round_count,
+                    stage_number=stage_number,
+                    stage_count=stage_count,
+                    completed_replicates=0,
+                    total_replicates=replicates,
+                )
+            )
         prefix = ordered[:contiguous_count]
         prepared = tuple(
             _prepare_player_series(prefix, player) for player in (0, 1)
@@ -1536,6 +1562,17 @@ def _stage_report(
                     stop - start,
                 )
                 mutable_replicates[player][:, start:stop] = chunk.T
+            if progress is not None:
+                progress(
+                    RegretAnalysisProgress(
+                        stage_index=first.stage_index,
+                        round_count=first.round_count,
+                        stage_number=stage_number,
+                        stage_count=stage_count,
+                        completed_replicates=stop,
+                        total_replicates=replicates,
+                    )
+                )
         replicate_series = (mutable_replicates[0], mutable_replicates[1])
 
     series: list[dict[str, Any]] = []
@@ -1673,6 +1710,7 @@ def _analyze_records(
     bootstrap_seed: int,
     bootstrap_metadata: Mapping[str, Any],
     source: str,
+    progress: Callable[[RegretAnalysisProgress], None] | None,
 ) -> dict[str, Any]:
     signatures = {
         (record.encoder_schema_version, record.action_count) for record in records
@@ -1699,14 +1737,19 @@ def _analyze_records(
         grouped[record.stage_index].append(record)
 
     rng = np.random.Generator(np.random.PCG64(bootstrap_seed))
+    ordered_stage_indexes = sorted(grouped)
+    stage_count = len(ordered_stage_indexes)
     stages = [
         _stage_report(
             grouped[stage_index],
             rng=rng,
             replicates=replicate_count,
             confidence=level,
+            stage_number=stage_number,
+            stage_count=stage_count,
+            progress=progress,
         )
-        for stage_index in sorted(grouped)
+        for stage_number, stage_index in enumerate(ordered_stage_indexes, start=1)
     ]
     available = any(bool(stage["available"]) for stage in stages)
     all_complete = all(bool(stage["complete_prefix"]) for stage in stages)
@@ -1747,6 +1790,7 @@ def analyze_regret(
     replicates: int = DEFAULT_BOOTSTRAP_REPLICATES,
     confidence: float = DEFAULT_CONFIDENCE,
     seed: int = DEFAULT_BOOTSTRAP_SEED,
+    progress: Callable[[RegretAnalysisProgress], None] | None = None,
 ) -> dict[str, Any]:
     """Analyze sidecars without importing a policy or mutating global RNGs."""
 
@@ -1774,6 +1818,7 @@ def analyze_regret(
         bootstrap_seed=bootstrap_seed,
         bootstrap_metadata=bootstrap_metadata,
         source="iteration_sidecars",
+        progress=progress,
     )
 
 
@@ -1900,6 +1945,7 @@ def analyze_run(
     confidence: float = DEFAULT_CONFIDENCE,
     bootstrap_replicates: int = DEFAULT_BOOTSTRAP_REPLICATES,
     seed: int = DEFAULT_BOOTSTRAP_SEED,
+    progress: Callable[[RegretAnalysisProgress], None] | None = None,
 ) -> dict[str, Any]:
     """Analyze a run, falling back to marked v2 checkpoint telemetry only."""
 
@@ -1921,6 +1967,7 @@ def analyze_run(
             replicates=bootstrap_replicates,
             confidence=confidence,
             seed=seed,
+            progress=progress,
         )
     # A compact policy contains no signed targets.  Its siblings must not
     # silently broaden an explicit policy-only analysis request.
@@ -1959,6 +2006,7 @@ def analyze_run(
             bootstrap_seed=bootstrap_seed,
             bootstrap_metadata=bootstrap_metadata,
             source="embedded_checkpoint",
+            progress=progress,
         )
 
     sidecar_paths = RegretSidecarArchive(run_dir).sidecars()
@@ -1974,6 +2022,7 @@ def analyze_run(
             bootstrap_seed=bootstrap_seed,
             bootstrap_metadata=bootstrap_metadata,
             source="iteration_sidecars",
+            progress=progress,
         )
 
     declared = _declared_telemetry(run_dir)
@@ -1991,6 +2040,7 @@ def analyze_run(
                     bootstrap_seed=bootstrap_seed,
                     bootstrap_metadata=bootstrap_metadata,
                     source="iteration_sidecars_plus_embedded_checkpoint",
+                    progress=progress,
                 )
     if sidecar_records:
         return _analyze_records(
@@ -2001,6 +2051,7 @@ def analyze_run(
             bootstrap_seed=bootstrap_seed,
             bootstrap_metadata=bootstrap_metadata,
             source="iteration_sidecars",
+            progress=progress,
         )
 
     if not declared:
@@ -2042,6 +2093,7 @@ def analyze_run(
         bootstrap_seed=bootstrap_seed,
         bootstrap_metadata=bootstrap_metadata,
         source="embedded_checkpoint",
+        progress=progress,
     )
 
 
@@ -2101,6 +2153,7 @@ __all__ = [
     "REGRET_SIDECAR_SCHEMA_VERSION",
     "IterationRegretRecord",
     "RegretArchiveError",
+    "RegretAnalysisProgress",
     "RegretFormatError",
     "RegretIterationCapture",
     "RegretRestoreResult",

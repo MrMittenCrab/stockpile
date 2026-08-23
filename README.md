@@ -31,11 +31,13 @@ price tracks are not Lite rules; Lite prices can rise above 10 normally.
 
 ## Browser play
 
-The local browser interface is a complete six-round Stockpile Lite game between
-`YOU` and a deliberately simple `COMPUTER` opponent. The computer chooses
-uniformly from Python's current legal actions; it is only a replaceable local
-policy placeholder, not Deep CFR inference. Games exist only in memory and are
-cleared when the backend stops.
+The local browser interface is a complete two-round Stockpile Lite game between
+`YOU` and `COMPUTER`. The computer seat loads the matching Deep CFR
+`round_02/policy.pt` from `artifacts/deep_cfr/lite/` (the same artifact family
+produced by `python -m stockpile solve`). Use `--policy PATH`, `--run INT`, or
+`--policy random` to override. Lite+ options that leave the trained canonical
+Lite rules fall back to uniform legal actions for those games. Games exist only
+in memory and are cleared when the backend stops.
 
 Install the web and frontend dependencies once:
 
@@ -75,8 +77,9 @@ scripts. The launcher passes a non-default API address to Vite automatically.
 Press `Ctrl+C` once to stop both services.
 
 This interface intentionally has no accounts, matchmaking, human multiplayer,
-hot-seat mode, WebSockets, persistent storage, production deployment, or Deep
-CFR recommendations. The legacy local multi-seat HTTP API remains available
+hot-seat mode, WebSockets, persistent storage, or production deployment. The
+computer seat uses Deep CFR inference from a local solve artifact; it does not
+stream live training. The legacy local multi-seat HTTP API remains available
 for compatibility but is not used by the browser product.
 
 ## Deep CFR
@@ -104,16 +107,35 @@ Normal runs are allocated automatically under
 `artifacts/deep_cfr/smoke/run_XX` namespace. Select a specific unused number
 with `--run INT`, or use `--output-dir PATH` for an unmanaged destination.
 
-Analyze the signed sampled-regret history recorded by a run:
+Summarize the policy's stored paired evaluation against a random legal-action
+opponent:
 
 ```console
 python -m stockpile analyze --mode lite --run 3
 python -m stockpile analyze --output-dir artifacts/deep_cfr/lite/run_03
 ```
 
-The analysis saves a plot-ready per-iteration series with an empirical
-confidence interval. Older checkpoints and policies without signed traversal
-history remain usable, but correctly report that this analysis is unavailable.
+Regenerate the learning-curve graph (score vs training traversals with a
+pointwise 95% confidence band) from saved checkpoint history:
+
+```console
+python -m stockpile analyze --method learning-curve --mode lite --run 3
+```
+
+Request sampled-regret convergence explicitly when needed:
+
+```console
+python -m stockpile analyze --method regret --mode lite --run 3
+python -m stockpile analyze --method regret \
+  --output-dir artifacts/deep_cfr/lite/run_03 --confidence 0.90
+```
+
+The default evaluation is read from the run's existing training metrics and
+does not rerun games. Regret analysis saves a plot-ready per-iteration series
+with an empirical confidence interval; its bootstrap progress is written to
+standard error so the compact result table on standard output remains clean.
+Older checkpoints and policies without the requested telemetry remain usable
+and report `N/A`.
 
 The solver targets the canonical two-player compact Lite game with sealed
 selling. It uses outcome-sampled Deep CFR and a strict visible-history encoder;

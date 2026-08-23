@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 SCHEMA_VERSION_V2 = "2.0"
+BROWSER_ROUND_COUNT = 2
 
 
 class StrictModelV2(BaseModel):
@@ -35,7 +36,7 @@ class OptionDescriptorV2(StrictModelV2):
 class SetupResponseV2(StrictModelV2):
     schema_version: Literal["2.0"] = SCHEMA_VERSION_V2
     mode: Literal["lite"] = "lite"
-    round_count: Literal[6] = 6
+    round_count: Literal[2] = BROWSER_ROUND_COUNT
     options: list[OptionDescriptorV2]
 
 
@@ -135,6 +136,7 @@ class CompanyV2(StrictModelV2):
         "matrix", "ledger", "molecular", "chevron", "crosshatch", "wave"
     ]
     price_dollars_per_share: int
+    price_delta_dollars_per_share: int | None = None
 
 
 class BidMarkerV2(StrictModelV2):
@@ -346,7 +348,7 @@ class TerminalResultsV2(StrictModelV2):
 class ConfigurationV2(StrictModelV2):
     mode: Literal["lite"] = "lite"
     player_count: Literal[2] = 2
-    round_count: Literal[6] = 6
+    round_count: Literal[2] = BROWSER_ROUND_COUNT
     options: LiteOptionsV2
 
 
@@ -361,7 +363,7 @@ class GameViewV2(StrictModelV2):
     revision: int
     configuration: ConfigurationV2
     round: int
-    total_rounds: Literal[6] = 6
+    total_rounds: Literal[2] = BROWSER_ROUND_COUNT
     phase: str
     phase_step: str
     viewer: ViewerV2
