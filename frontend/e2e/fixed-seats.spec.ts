@@ -152,11 +152,15 @@ function recordView(view: GameView, coverage: Coverage, token: string) {
     }
   }
 
-  if (view.viewer.player_id !== 0 || view.viewer.name !== "YOU") {
+  if (view.viewer.name !== "YOU" || (view.viewer.player_id !== 0 && view.viewer.player_id !== 1)) {
     fail(coverage, `Viewer changed to ${JSON.stringify(view.viewer)}`);
   }
-  if (view.configuration.player_count !== 2 || view.configuration.round_count !== 2) {
-    fail(coverage, "Browser configuration was not fixed to two players and two rounds");
+  const human = humanPlayer(view);
+  if (human.player_id !== view.viewer.player_id) {
+    fail(coverage, "Human public seat does not match viewer");
+  }
+  if (view.configuration.player_count !== 2 || view.configuration.round_count !== 1) {
+    fail(coverage, "Browser configuration was not fixed to two players and one round");
   }
   if (view.players.length !== 2 || view.players[0]?.name !== "YOU" || view.players[1]?.name !== "COMPUTER") {
     fail(coverage, "Public player list was not exactly YOU and COMPUTER");
@@ -491,7 +495,7 @@ async function submitAction(harness: GameHarness, action: LegalAction) {
     if (
       sale.shares_thousands > 0
       && next.phase === "selling"
-      && next.active_player_id === 0
+      && next.active_player_id === next.viewer.player_id
       && next.pending_decision.kind === "sell"
     ) {
       const cashDelta = afterHuman.cash_thousands - beforeHuman.cash_thousands;
@@ -524,7 +528,7 @@ async function submitAction(harness: GameHarness, action: LegalAction) {
       sale.shares_thousands === 0
       && harness.coverage.sawSaleMetricSettlement
       && next.phase === "selling"
-      && next.active_player_id === 0
+      && next.active_player_id === next.viewer.player_id
       && next.pending_decision.kind === "sell"
     ) {
       expect(afterHuman.cash_thousands).toBe(beforeHuman.cash_thousands);
@@ -871,10 +875,10 @@ async function expectDisciplinedVisualLanguage(page: Page) {
 }
 
 function expectedCheckpointSequence() {
-  return Array.from({ length: 2 }, (_, index) => index + 1).flatMap((round) => [
-    { kind: "demand_result" as const, round },
-    { kind: "round_result" as const, round },
-  ]);
+  return [
+    { kind: "demand_result" as const, round: 1 },
+    { kind: "round_result" as const, round: 1 },
+  ];
 }
 
 test("Home exposes only Trainer LITE and LITE+ through one button language", async ({ page }) => {
@@ -1606,7 +1610,7 @@ test("RESIGN is persistent, cancellable, and returns home only after confirmatio
   }
 });
 
-test("default seed 101 completes two rounds through Demand and Round acknowledgements", async ({ page, request }) => {
+test("default seed 101 completes one round through Demand and Round acknowledgements", async ({ page, request }) => {
   test.setTimeout(180_000);
   const harness = await openGame(page, request, defaultOptions, 101);
   try {
@@ -1627,7 +1631,8 @@ test("default seed 101 completes two rounds through Demand and Round acknowledge
       expect(purchasers.filter((playerId) => playerId === 0)).toHaveLength(2);
       expect(purchasers.filter((playerId) => playerId === 1)).toHaveLength(2);
     }
-    expect(harness.coverage.views.every((view) => view.viewer.player_id === 0 && view.viewer.name === "YOU")).toBe(true);
+    expect(harness.coverage.views.every((view) => view.viewer.name === "YOU")).toBe(true);
+    expect(harness.coverage.views.every((view) => view.viewer.player_id === harness.view.viewer.player_id)).toBe(true);
     expect(harness.coverage.views.every((view) => view.stockpiles.length === 4)).toBe(true);
     expect(harness.coverage.views.every((view) => view.players.every((player) => player.bid_markers.length === 2))).toBe(true);
     expect(harness.coverage.backChecked).toBe(true);
@@ -1637,7 +1642,6 @@ test("default seed 101 completes two rounds through Demand and Round acknowledge
     expect(harness.coverage.sawDemandMetricSettlement).toBe(true);
     expect(harness.coverage.sawDemandMetricPersistence).toBe(true);
     expect(harness.coverage.sawIndependentMetricPreservation).toBe(true);
-    expect(harness.coverage.sawNewRoundMetricClear).toBe(true);
 
     await expect(page.getByText("WINNER", { exact: true })).toHaveCount(0);
     const chart = page.getByTestId("terminal-chart");
@@ -1663,6 +1667,23 @@ test("default seed 101 completes two rounds through Demand and Round acknowledge
       expect(result.liquidation_value_thousands).toBe(
         result.liquidation.reduce((total, line) => total + line.value_thousands, 0),
       );
+      const row = chart.locator(`[data-chart-player="${result.player_id === terminal.viewer.player_id ? "human" : "computer"}"]`);
+      await expect(row.locator("[data-chart-position]")).toHaveAttribute(
+        "data-chart-position",
+        String(result.liquidation_value_thousands),
+      );
+      await expect(row.locator("[data-chart-cash]")).toHaveAttribute(
+        "data-chart-cash",
+        String(result.cash_before_liquidation_thousands),
+      );
+    }
+    const computerResult = terminal.terminal_results!.players.find(
+      (player) => player.player_id !== terminal.viewer.player_id,
+    )!;
+    if (computerResult.liquidation_value_thousands > 0) {
+      await expect(
+        page.getByLabel("Players").locator('[data-player-role="computer"] [data-player-metric="position"]'),
+      ).toContainText(`$${computerResult.liquidation_value_thousands}K`);
     }
   } finally {
     await awaitAudits(harness);
@@ -1687,7 +1708,6 @@ test("all-options seed 2 renders Impact, ordinary prices above ten, and reaches 
     expect(harness.coverage.sawSaleMetricSettlement).toBe(true);
     expect(harness.coverage.sawHoldMetricClear).toBe(true);
     expect(harness.coverage.sawIndependentMetricPreservation).toBe(true);
-    expect(harness.coverage.sawNewRoundMetricClear).toBe(true);
   } finally {
     await awaitAudits(harness);
   }

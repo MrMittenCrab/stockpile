@@ -248,7 +248,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=_named_positive_integer("run"),
         default=None,
         metavar="INT",
-        help="managed Deep CFR run whose round_02 policy.pt the computer should use",
+        help="managed Deep CFR run whose round_01 policy.pt the computer should use",
     )
     analyze_parser = commands.add_parser(
         "analyze",
@@ -416,10 +416,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--eval-every",
         type=_named_positive_integer("eval-every"),
         default=None,
-        metavar="TRAVERSALS",
+        metavar="ITERATIONS",
         help=(
-            "with --until-win-rate, train this many traversals between "
-            "checkpointed evaluations (default: 10000)"
+            "with --until-win-rate, train this many iterations between "
+            "checkpointed evaluations (default: 100)"
         ),
     )
     training.add_argument(
@@ -433,13 +433,13 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     training.add_argument(
-        "--max-traversals",
-        type=_named_positive_integer("max-traversals"),
+        "--max-iterations",
+        type=_named_positive_integer("max-iterations"),
         default=None,
         metavar="INT",
         help=(
             "with --until-win-rate, stop after this many cumulative training "
-            "traversals if the target has not been reached"
+            "iterations if the target has not been reached (default: 10000)"
         ),
     )
     training.add_argument(
@@ -983,15 +983,22 @@ def _analyze_learning_curve(
     checkpoints.sort(key=lambda item: int(item["cumulative_traversals"]))
     print("Deep CFR learning curve vs random", file=output)
     print(
-        "traversals\tscore\tci95_lower\tci95_upper\twins\tlosses\tties",
+        "traversals\twin_rate\tci95_lower\tci95_upper\twins\tlosses\tties",
         file=output,
     )
     for checkpoint in checkpoints:
+        win_rate = checkpoint.get("win_rate", checkpoint["score"])
+        ci_low = checkpoint.get(
+            "win_rate_ci95_lower", checkpoint["score_ci95_lower"]
+        )
+        ci_high = checkpoint.get(
+            "win_rate_ci95_upper", checkpoint["score_ci95_upper"]
+        )
         print(
             f"{checkpoint['cumulative_traversals']}\t"
-            f"{checkpoint['score']:.6f}\t"
-            f"{checkpoint['score_ci95_lower']:.6f}\t"
-            f"{checkpoint['score_ci95_upper']:.6f}\t"
+            f"{float(win_rate):.6f}\t"
+            f"{float(ci_low):.6f}\t"
+            f"{float(ci_high):.6f}\t"
             f"{checkpoint['wins']}\t"
             f"{checkpoint['losses']}\t"
             f"{checkpoint['ties']}",
@@ -1153,9 +1160,9 @@ def solve(
             checkpoint_every=arguments.checkpoint_every,
             evaluation_pairs=arguments.evaluation_pairs,
             until_win_rate=arguments.until_win_rate,
-            eval_every_traversals=arguments.eval_every,
+            eval_every_iterations=arguments.eval_every,
             eval_games=arguments.eval_games,
-            max_traversals=arguments.max_traversals,
+            max_iterations=arguments.max_iterations,
             seed=arguments.seed,
             device=arguments.device,
             output_dir=run_ref.output_dir,
@@ -1170,9 +1177,9 @@ def solve(
         print(
             "Until win rate: "
             f"{100.0 * float(training_config.until_win_rate):.1f}% vs random "
-            f"(eval every {training_config.eval_every_traversals:,} traversals, "
+            f"(eval every {training_config.eval_every_iterations:,} iterations, "
             f"{training_config.eval_games:,} games, "
-            f"max {training_config.max_traversals:,} traversals, "
+            f"max {training_config.max_iterations:,} iterations, "
             f"{training_config.until_win_rate_consecutive} consecutive hits)",
             file=output,
         )

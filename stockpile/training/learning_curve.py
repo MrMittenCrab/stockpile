@@ -26,7 +26,7 @@ LEARNING_CURVE_CSV_NAME = "learning_curve.csv"
 LEARNING_CURVE_PLOT_NAME = "learning_curve.png"
 EVALUATION_HISTORY_CSV_NAME = "evaluation_history.csv"
 
-_OUTCOME_SCORE = {"win": 1.0, "tie": 0.5, "loss": 0.0}
+_OUTCOME_SCORE = {"win": 1.0, "tie": 0.0, "loss": 0.0}
 
 _EVALUATION_HISTORY_FIELDS = (
     "traversals",
@@ -143,7 +143,7 @@ def bootstrap_seed(
 
 
 def outcome_score(outcome: str) -> float:
-    """Map a single-game outcome onto the learning-curve score scale."""
+    """Map a single-game outcome onto the win-rate score scale (ties count as 0)."""
 
     try:
         return _OUTCOME_SCORE[outcome]
@@ -219,7 +219,6 @@ def evaluate_learning_curve_checkpoint(
         raise ValueError("pairs must be a positive integer")
 
     pair_scores: list[float] = []
-    pair_win_rates: list[float] = []
     utilities: list[float] = []
     differentials: list[float] = []
     wins = losses = ties = 0
@@ -227,7 +226,6 @@ def evaluate_learning_curve_checkpoint(
     for pair_index in range(pairs):
         pair_seed = int(evaluation_seed) + pair_index
         seat_scores: list[float] = []
-        pair_wins = 0
         for trained_seat in (0, 1):
             game = play_evaluation_game(
                 configuration,
@@ -235,33 +233,28 @@ def evaluate_learning_curve_checkpoint(
                 trained_seat=trained_seat,
                 seed=pair_seed,
             )
-            score = outcome_score(str(game["outcome"]))
+            outcome = str(game["outcome"])
+            score = outcome_score(outcome)
             seat_scores.append(score)
             utilities.append(float(game["trained_utility"]))
             differentials.append(float(game["final_cash_differential"]))
-            if score == 1.0:
+            if outcome == "win":
                 wins += 1
-                pair_wins += 1
-            elif score == 0.0:
+            elif outcome == "loss":
                 losses += 1
-            else:
+            elif outcome == "tie":
                 ties += 1
+            else:
+                raise ValueError(f"unknown evaluation outcome: {outcome!r}")
         pair_scores.append(sum(seat_scores) / len(seat_scores))
-        pair_win_rates.append(pair_wins / 2.0)
 
-    score = sum(pair_scores) / len(pair_scores)
+    game_count = pairs * 2
+    score = wins / game_count
     lower, upper = bootstrap_mean_interval(
         pair_scores,
         resamples=bootstrap_resamples,
         seed=bootstrap_rng_seed,
     )
-    win_rate_lower, win_rate_upper = bootstrap_mean_interval(
-        pair_win_rates,
-        resamples=bootstrap_resamples,
-        seed=bootstrap_rng_seed ^ 0xA5A5A5A5,
-    )
-    game_count = pairs * 2
-    win_rate = wins / game_count
     return {
         "round_horizon": int(round_horizon),
         "stage_index": int(stage_index),
@@ -274,9 +267,9 @@ def evaluate_learning_curve_checkpoint(
         "wins": int(wins),
         "losses": int(losses),
         "ties": int(ties),
-        "win_rate": float(win_rate),
-        "win_rate_ci95_lower": float(win_rate_lower),
-        "win_rate_ci95_upper": float(win_rate_upper),
+        "win_rate": float(score),
+        "win_rate_ci95_lower": float(lower),
+        "win_rate_ci95_upper": float(upper),
         "score": float(score),
         "score_ci95_lower": float(lower),
         "score_ci95_upper": float(upper),
@@ -511,9 +504,19 @@ def plot_learning_curve(
     checkpoints.sort(key=lambda item: int(item["cumulative_traversals"]))
 
     traversals = [int(item["cumulative_traversals"]) for item in checkpoints]
-    scores = [100.0 * float(item["score"]) for item in checkpoints]
-    lowers = [100.0 * float(item["score_ci95_lower"]) for item in checkpoints]
-    uppers = [100.0 * float(item["score_ci95_upper"]) for item in checkpoints]
+    scores = [
+        100.0 * float(item.get("win_rate", item["score"])) for item in checkpoints
+    ]
+    lowers = [
+        100.0
+        * float(item.get("win_rate_ci95_lower", item["score_ci95_lower"]))
+        for item in checkpoints
+    ]
+    uppers = [
+        100.0
+        * float(item.get("win_rate_ci95_upper", item["score_ci95_upper"]))
+        for item in checkpoints
+    ]
 
     destination = Path(output_path)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -546,7 +549,7 @@ def plot_learning_curve(
     )
     axis.set_title("Deep CFR Performance vs Random")
     axis.set_xlabel("Training traversals")
-    axis.set_ylabel("Score vs random (%)")
+    axis.set_ylabel("Win rate vs random (%)")
     axis.set_ylim(0.0, 100.0)
     axis.legend(frameon=False)
     axis.grid(True, alpha=0.25)

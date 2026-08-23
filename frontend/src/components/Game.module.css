@@ -377,17 +377,22 @@
 }
 .terminalChart {
   display: grid;
-  width: 75%;
+  width: 100%;
   gap: 12px;
-  margin: 4px auto 0;
+  margin: 4px 0 0;
 }
 .chartRow {
+  /* Match .ranking columns so chart labels sit under "#N YOU/COMPUTER". */
   display: grid;
-  grid-template-columns: minmax(0, 74px) minmax(0, 1fr);
+  grid-template-columns: 34px 74px minmax(0, 1fr);
   align-items: center;
-  gap: 10px;
+  gap: 12px;
+}
+.chartLabel {
+  grid-column: 2;
 }
 .chartTrack {
+  grid-column: 3;
   position: relative;
   display: block;
   height: 22px;

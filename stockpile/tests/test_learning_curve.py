@@ -48,7 +48,7 @@ class EvaluationScheduleTests(unittest.TestCase):
 class ScoringAndBootstrapTests(unittest.TestCase):
     def test_outcome_scores_and_pair_bootstrap_are_deterministic(self) -> None:
         self.assertEqual(learning_curve.outcome_score("win"), 1.0)
-        self.assertEqual(learning_curve.outcome_score("tie"), 0.5)
+        self.assertEqual(learning_curve.outcome_score("tie"), 0.0)
         self.assertEqual(learning_curve.outcome_score("loss"), 0.0)
 
         lower, upper = learning_curve.bootstrap_mean_interval(
@@ -105,13 +105,14 @@ class ScoringAndBootstrapTests(unittest.TestCase):
         self.assertEqual(record["wins"], 2)
         self.assertEqual(record["losses"], 1)
         self.assertEqual(record["ties"], 1)
-        # pair scores: mean(1,0)=0.5 and mean(0.5,1)=0.75 → mean 0.625
-        self.assertAlmostEqual(record["score"], 0.625)
-        self.assertAlmostEqual(record["win_rate"], 0.5)
+        # Strict win rate: ties count as 0 → 2 wins / 4 games = 0.5
+        # pair scores: mean(1,0)=0.5 and mean(0,1)=0.5 → mean 0.5
+        self.assertAlmostEqual(record["score"], 0.5)
+        self.assertAlmostEqual(record["win_rate"], record["score"])
+        self.assertAlmostEqual(record["score_ci95_lower"], record["win_rate_ci95_lower"])
+        self.assertAlmostEqual(record["score_ci95_upper"], record["win_rate_ci95_upper"])
         self.assertLessEqual(record["score_ci95_lower"], record["score"])
         self.assertGreaterEqual(record["score_ci95_upper"], record["score"])
-        self.assertLessEqual(record["win_rate_ci95_lower"], record["win_rate"])
-        self.assertGreaterEqual(record["win_rate_ci95_upper"], record["win_rate"])
         self.assertAlmostEqual(record["mean_utility"], 0.25)
         self.assertAlmostEqual(record["mean_final_cash_differential"], 2.5)
         json.dumps(record, allow_nan=False)
@@ -193,24 +194,19 @@ class PersistenceAndPlotTests(unittest.TestCase):
 
 class UntilWinRateConfigTests(unittest.TestCase):
     def test_until_win_rate_defaults_and_validation(self) -> None:
-        config = DeepCFRConfig(
-            until_win_rate=0.7,
-            max_traversals=1_000_000,
-        )
-        self.assertEqual(config.eval_every_traversals, 10_000)
+        config = DeepCFRConfig(until_win_rate=0.7)
+        self.assertEqual(config.eval_every_iterations, 100)
         self.assertEqual(config.eval_games, 2_000)
-        self.assertEqual(config.eval_every_iterations, 250)
+        self.assertEqual(config.max_iterations, 10_000)
         self.assertEqual(config.learning_curve_evaluation_pairs, 1_000)
 
-        with self.assertRaisesRegex(ValueError, "max_traversals"):
-            DeepCFRConfig(until_win_rate=0.7)
         with self.assertRaisesRegex(ValueError, "require --until-win-rate"):
-            DeepCFRConfig(eval_every_traversals=10_000)
-        with self.assertRaisesRegex(ValueError, "divisible"):
+            DeepCFRConfig(eval_every_iterations=10_000)
+        with self.assertRaisesRegex(ValueError, "at least eval_every"):
             DeepCFRConfig(
                 until_win_rate=0.7,
-                eval_every_traversals=10001,
-                max_traversals=1_000_000,
+                eval_every_iterations=100,
+                max_iterations=40,
             )
 
     def test_checkpoint_evaluation_seeds_differ_by_iteration(self) -> None:

@@ -66,28 +66,31 @@ Each stage writes:
 During each stage the trainer pauses at approximately ten evenly spaced
 iterations (always including the final iteration), freezes the current
 in-memory average policy, and evaluates 500 held-out seat-swapped pairs
-against uniform random (1,000 games). Pair scores use win=1 / tie=0.5 /
-loss=0; the checkpoint score is the mean pair score with a pointwise 95%
-bootstrap confidence band (10,000 resamples of complete pairs). These
-evaluation checkpoints do not write separate policy files and do not mutate
-training state.
+against uniform random (1,000 games). The checkpoint score is the strict win
+rate (wins / games; ties count as 0) with a pointwise 95% bootstrap confidence
+band (10,000 resamples of complete seat-swapped pairs). These evaluation
+checkpoints do not write separate policy files and do not mutate training
+state.
 
 To keep training until the policy beats the random benchmark, pass
-`--until-win-rate` with a traversal budget:
+`--until-win-rate` with an iteration budget:
 
 ```console
-python -m stockpile solve --mode lite --rounds 1 \
-  --until-win-rate 0.70 --eval-every 10000 --eval-games 2000 \
-  --max-traversals 1000000
+python -m stockpile solve --mode lite --rounds 1 --until-win-rate 0.70
 ```
 
-In that mode the solver trains in `--eval-every` traversal increments, updates
-the normal stage checkpoint, archives a copy under `checkpoints/traversals_*`,
-and evaluates with a fresh seat-balanced seed set each time. History is written
-to `evaluation_history.csv` (`traversals,games,wins,losses,ties,win_rate,
+Defaults with `--until-win-rate`: evaluate every 100 iterations, 2000 seat-balanced
+games per checkpoint, and stop by 10,000 iterations if the target is unmet.
+Override with `--eval-every`, `--eval-games`, and `--max-iterations` as needed.
+
+In that mode the solver trains in `--eval-every` iteration increments (default 100),
+prints an evaluation line (including `iteration=N`), updates the normal stage
+checkpoint, archives a copy under `checkpoints/traversals_*`, and evaluates with a
+fresh seat-balanced seed set each time. History is written to
+`evaluation_history.csv` (`traversals,games,wins,losses,ties,win_rate,
 mean_utility,ci_low,ci_high`) as well as the learning-curve artifacts. Training
 stops only after the target win rate is hit on two consecutive evaluations, or
-when `--max-traversals` is reached. Without `--until-win-rate`, solve behavior
+when `--max-iterations` is reached. Without `--until-win-rate`, solve behavior
 is unchanged.
 
 Summarize the stored paired evaluation for one run after completion or

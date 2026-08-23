@@ -62,11 +62,13 @@ from .v2_schemas import (
 )
 
 
+# Legacy fixed-seat defaults retained for import compatibility in tests.
 HUMAN_ID = 0
 COMPUTER_ID = 1
 PLAYER_NAMES = ("YOU", "COMPUTER")
 CHANCE_SEED_MASK = 0x4348414E43455F32
 POLICY_SEED_MASK = 0x504F4C4943595F32
+SEAT_SEED_MASK = 0x534541545F5632
 MAX_AUTOMATIC_STEPS = 20_000
 MAX_PUBLIC_EVENTS = 80
 
@@ -153,6 +155,8 @@ class V2GameSession:
     game_id: str
     configuration: interface.GameConfig
     seed: int
+    human_id: int
+    computer_id: int
     state: platform.GameState
     token_digest: str
     chance_rng: random.Random
@@ -216,6 +220,8 @@ class V2SessionStore:
             action_space_mode="compact",
         )
         seed = request.seed if request.seed is not None else secrets.randbits(63)
+        human_id = random.Random(seed ^ SEAT_SEED_MASK).randrange(2)
+        computer_id = 1 - human_id
         state = platform.GameState(configuration.game)
         game_id = uuid.uuid4().hex
         token = secrets.token_urlsafe(32)
@@ -223,6 +229,8 @@ class V2SessionStore:
             game_id=game_id,
             configuration=configuration,
             seed=seed,
+            human_id=human_id,
+            computer_id=computer_id,
             state=state,
             token_digest=_token_digest(token),
             chance_rng=random.Random(seed ^ CHANCE_SEED_MASK),
@@ -274,7 +282,7 @@ class V2SessionStore:
             if self._is_buffered_selling(session):
                 self._act_in_sealed_plan(session, action_id)
             else:
-                if session.state.current_player() != HUMAN_ID:
+                if session.state.current_player() != session.human_id:
                     raise SessionError(409, "turn_conflict", "COMPUTER must act first")
                 if session.state.phase == platform.Phase.SUPPLY.value:
                     raise SessionError(
@@ -292,7 +300,7 @@ class V2SessionStore:
                         "Submit the complete decision plan",
                     )
                 _information, observed_legal = platform.observe_game_state(
-                    session.rule_set, session.state, HUMAN_ID
+                    session.rule_set, session.state, session.human_id
                 )
                 projected_legal = self._deduplicate_sell_actions(
                     session, session.state, observed_legal
@@ -301,7 +309,7 @@ class V2SessionStore:
                 if action_id not in legal_ids:
                     raise SessionError(422, "illegal_action", "Action is not legal now")
                 self._track_bid_before_action(session, action_id)
-                self._apply_and_observe(session, HUMAN_ID, action_id)
+                self._apply_and_observe(session, session.human_id, action_id)
             if session.checkpoint is None:
                 self._advance_automatic(session)
             session.revision += 1
@@ -323,7 +331,7 @@ class V2SessionStore:
             if (
                 session.state.phase != platform.Phase.SUPPLY.value
                 or session.state.stage != "supply_card"
-                or session.state.current_player() != HUMAN_ID
+                or session.state.current_player() != session.human_id
             ):
                 raise SessionError(409, "turn_conflict", "A Supply batch is not available")
             self._supply_batch(session)
@@ -334,7 +342,7 @@ class V2SessionStore:
             candidate = session.state
             for action_id in plan.action_ids:
                 candidate = _apply_player_action(
-                    session.rule_set, candidate, HUMAN_ID, action_id
+                    session.rule_set, candidate, session.human_id, action_id
                 )
             session.state = candidate
             self._append_supply_placements(session, plan)
@@ -376,12 +384,12 @@ class V2SessionStore:
             candidate = session.state
             for action_id in plan.action_ids:
                 candidate = _apply_player_action(
-                    session.rule_set, candidate, HUMAN_ID, action_id
+                    session.rule_set, candidate, session.human_id, action_id
                 )
 
             for action_id in plan.action_ids:
                 self._track_bid_before_action(session, action_id)
-                self._apply_and_observe(session, HUMAN_ID, action_id)
+                self._apply_and_observe(session, session.human_id, action_id)
             session.decision_plans.clear()
             if session.checkpoint is None:
                 self._advance_automatic(session)
@@ -474,7 +482,7 @@ class V2SessionStore:
             if self._is_buffered_selling(session):
                 buffer = self._ensure_sealed_buffer(session)
                 self._complete_computer_sealed_plan(session, buffer)
-                if buffer.plans[HUMAN_ID].complete and buffer.plans[COMPUTER_ID].complete:
+                if buffer.plans[session.human_id].complete and buffer.plans[session.computer_id].complete:
                     before_phase = session.state.phase
                     before_round = session.state.round
                     self._commit_sealed_buffer(session)
@@ -482,9 +490,9 @@ class V2SessionStore:
                     continue
                 return
             actor = int(session.state.current_player())
-            if actor == COMPUTER_ID:
+            if actor == session.computer_id:
                 information, legal = platform.observe_game_state(
-                    session.rule_set, session.state, COMPUTER_ID
+                    session.rule_set, session.state, session.computer_id
                 )
                 if not legal:
                     raise RuntimeError("COMPUTER turn has no legal action")
@@ -499,12 +507,12 @@ class V2SessionStore:
                 if action_id not in {action.action_id for action in legal}:
                     raise RuntimeError("computer policy returned an illegal action")
                 self._track_bid_before_action(session, action_id)
-                self._apply_and_observe(session, COMPUTER_ID, action_id)
+                self._apply_and_observe(session, session.computer_id, action_id)
                 continue
-            if actor == HUMAN_ID:
-                forced = self._forced_sale_action(session.state, HUMAN_ID)
+            if actor == session.human_id:
+                forced = self._forced_sale_action(session.state, session.human_id)
                 if forced is not None:
-                    self._apply_and_observe(session, HUMAN_ID, forced)
+                    self._apply_and_observe(session, session.human_id, forced)
                     continue
                 return
             raise RuntimeError(f"unexpected non-player state {actor}")
@@ -528,7 +536,7 @@ class V2SessionStore:
             }
             for pile in session.state.stockpiles
         }
-        human_holdings = self._human_holdings(session.state)
+        human_holdings = self._human_holdings(session, session.state)
         session.state.apply_action(selected)
         self._record_price_events(
             session,
@@ -610,7 +618,7 @@ class V2SessionStore:
             if captured_cards is None:
                 raise RuntimeError("Demand resolved without a safe Stockpile snapshot")
             resolved_information, _legal = platform.observe_game_state(
-                session.rule_set, session.state, HUMAN_ID
+                session.rule_set, session.state, session.human_id
             )
             known = {
                 card.card_id: card for card in resolved_information.known_cards
@@ -707,7 +715,7 @@ class V2SessionStore:
         metrics retain their existing presentation state.
         """
 
-        human_holdings = self._human_holdings(before)
+        human_holdings = self._human_holdings(session, before)
 
         if (
             before.phase == platform.Phase.DEMAND.value
@@ -717,15 +725,15 @@ class V2SessionStore:
             # payment, acquired shares, and immediately payable fees all land
             # in this authoritative transition.
             cash_before = session.demand_cash_before or (
-                int(before.players[HUMAN_ID].cash),
-                int(before.players[COMPUTER_ID].cash),
+                int(before.players[0].cash),
+                int(before.players[1].cash),
             )
             position_before = (
                 session.demand_position_before
                 if session.demand_position_before is not None
-                else self._position_value(before, HUMAN_ID)
+                else self._position_value(before, session.human_id)
             )
-            for settled_player in (HUMAN_ID, COMPUTER_ID):
+            for settled_player in (session.human_id, session.computer_id):
                 self._replace_cash_delta(
                     session,
                     settled_player,
@@ -734,7 +742,7 @@ class V2SessionStore:
                 )
             self._replace_human_position_delta(
                 session,
-                self._position_value(after, HUMAN_ID)
+                self._position_value(after, session.human_id)
                 - position_before,
             )
             session.demand_cash_before = None
@@ -756,7 +764,7 @@ class V2SessionStore:
                 int(after.players[player_id].cash)
                 - int(before.players[player_id].cash),
             )
-            if player_id == HUMAN_ID:
+            if player_id == session.human_id:
                 human_holdings[preview.company_id] = int(
                     preview.resulting_represented
                 )
@@ -789,13 +797,11 @@ class V2SessionStore:
         session: V2GameSession, player_id: int, delta: int
     ) -> None:
         value = int(delta) or None
-        human, computer = session.latest_cash_deltas
-        if player_id == HUMAN_ID:
-            session.latest_cash_deltas = (value, computer)
-        elif player_id == COMPUTER_ID:
-            session.latest_cash_deltas = (human, value)
-        else:
+        if player_id not in (0, 1):
             raise RuntimeError(f"unexpected browser player {player_id}")
+        deltas = list(session.latest_cash_deltas)
+        deltas[player_id] = value
+        session.latest_cash_deltas = (deltas[0], deltas[1])
 
     @staticmethod
     def _replace_human_position_delta(
@@ -804,11 +810,19 @@ class V2SessionStore:
         session.latest_human_position_delta = int(delta) or None
 
     @staticmethod
-    def _human_holdings(state: platform.GameState) -> list[int]:
+    def _human_holdings(session: V2GameSession, state: platform.GameState) -> list[int]:
         return [
-            int(state._represented_shares(HUMAN_ID, company_id))
+            int(state._represented_shares(session.human_id, company_id))
             for company_id in range(state.rule_set.company_count)
         ]
+
+    @staticmethod
+    def _player_display_name(session: V2GameSession, player_id: int) -> str:
+        if player_id == session.human_id:
+            return "YOU"
+        if player_id == session.computer_id:
+            return "COMPUTER"
+        raise RuntimeError(f"unexpected browser player {player_id}")
 
     def _record_price_events(
         self,
@@ -820,7 +834,7 @@ class V2SessionStore:
         effective_human_holdings = (
             [int(shares) for shares in human_holdings]
             if human_holdings is not None
-            else self._human_holdings(state)
+            else self._human_holdings(session, state)
         )
         new_automatic_events = [
             event
@@ -917,11 +931,11 @@ class V2SessionStore:
             and session.demand_cash_before is None
         ):
             session.demand_cash_before = (
-                int(session.state.players[HUMAN_ID].cash),
-                int(session.state.players[COMPUTER_ID].cash),
+                int(session.state.players[0].cash),
+                int(session.state.players[1].cash),
             )
             session.demand_position_before = self._position_value(
-                session.state, HUMAN_ID
+                session.state, session.human_id
             )
 
     @staticmethod
@@ -946,7 +960,7 @@ class V2SessionStore:
         if current is not None and current.round == session.state.round:
             return current
         plans: dict[int, SealedPlayerPlanV2] = {}
-        for player_id in (HUMAN_ID, COMPUTER_ID):
+        for player_id in (session.human_id, session.computer_id):
             clone = session.state.clone()
             while (
                 clone.phase == platform.Phase.SELLING.value
@@ -1009,16 +1023,16 @@ class V2SessionStore:
     def _complete_computer_sealed_plan(
         self, session: V2GameSession, buffer: SealedSaleBufferV2
     ) -> None:
-        plan = buffer.plans[COMPUTER_ID]
+        plan = buffer.plans[session.computer_id]
         while not plan.complete:
             if (
                 plan.state.phase != platform.Phase.SELLING.value
-                or plan.state.current_player() != COMPUTER_ID
+                or plan.state.current_player() != session.computer_id
             ):
                 plan.complete = True
                 return
             information, legal = platform.observe_game_state(
-                session.rule_set, plan.state, COMPUTER_ID
+                session.rule_set, plan.state, session.computer_id
             )
             if not legal:
                 raise RuntimeError("COMPUTER sealed-selling plan has no legal action")
@@ -1034,24 +1048,24 @@ class V2SessionStore:
                 raise RuntimeError("computer policy returned an illegal sealed-sale action")
             plan.action_ids.append(action_id)
             plan.state = _apply_player_action(
-                session.rule_set, plan.state, COMPUTER_ID, action_id
+                session.rule_set, plan.state, session.computer_id, action_id
             )
             plan.complete = not (
                 plan.state.phase == platform.Phase.SELLING.value
-                and plan.state.current_player() == COMPUTER_ID
+                and plan.state.current_player() == session.computer_id
             )
 
     def _act_in_sealed_plan(self, session: V2GameSession, action_id: int) -> None:
         buffer = self._ensure_sealed_buffer(session)
-        plan = buffer.plans[HUMAN_ID]
+        plan = buffer.plans[session.human_id]
         if plan.complete:
             raise SessionError(
                 409, "turn_conflict", "Your private selling plan is complete"
             )
-        if plan.state.current_player() != HUMAN_ID:
+        if plan.state.current_player() != session.human_id:
             raise SessionError(409, "turn_conflict", "YOU cannot act now")
         _information, observed_legal = platform.observe_game_state(
-            session.rule_set, plan.state, HUMAN_ID
+            session.rule_set, plan.state, session.human_id
         )
         projected_legal = self._deduplicate_sell_actions(
             session, plan.state, observed_legal
@@ -1061,13 +1075,13 @@ class V2SessionStore:
             raise SessionError(422, "illegal_action", "Action is not legal now")
         plan.action_ids.append(action_id)
         plan.state = _apply_player_action(
-            session.rule_set, plan.state, HUMAN_ID, action_id
+            session.rule_set, plan.state, session.human_id, action_id
         )
         plan.complete = not (
             plan.state.phase == platform.Phase.SELLING.value
-            and plan.state.current_player() == HUMAN_ID
+            and plan.state.current_player() == session.human_id
         )
-        self._auto_forced_sealed_sales(session, plan, HUMAN_ID)
+        self._auto_forced_sealed_sales(session, plan, session.human_id)
         self._complete_computer_sealed_plan(session, buffer)
         if all(candidate.complete for candidate in buffer.plans.values()):
             before_phase = session.state.phase
@@ -1080,13 +1094,13 @@ class V2SessionStore:
         if buffer is None:
             return
         before = session.state
-        human_holdings = self._human_holdings(before)
+        human_holdings = self._human_holdings(session, before)
         metric_capable = tuple(
             any(
                 before._represented_shares(player_id, company_id) > 0
                 for company_id in range(session.rule_set.company_count)
             )
-            for player_id in (HUMAN_ID, COMPUTER_ID)
+            for player_id in (0, 1)
         )
         queues = {
             player: deque(plan.action_ids) for player, plan in buffer.plans.items()
@@ -1117,7 +1131,7 @@ class V2SessionStore:
             raise RuntimeError("sealed selling settlement has no batch record")
         sales = selling_batch.get("sales", {})
         human_sales = (
-            sales.get(HUMAN_ID, sales.get(str(HUMAN_ID), {}))
+            sales.get(session.human_id, sales.get(str(session.human_id), {}))
             if isinstance(sales, Mapping)
             else {}
         )
@@ -1130,7 +1144,7 @@ class V2SessionStore:
                 raise RuntimeError("sealed selling batch sold unavailable shares")
 
         session.state = state
-        for player_id in (HUMAN_ID, COMPUTER_ID):
+        for player_id in (session.human_id, session.computer_id):
             if metric_capable[player_id]:
                 self._replace_cash_delta(
                     session,
@@ -1138,11 +1152,11 @@ class V2SessionStore:
                     int(state.players[player_id].cash)
                     - int(before.players[player_id].cash),
                 )
-        if metric_capable[HUMAN_ID]:
+        if metric_capable[session.human_id]:
             self._replace_human_position_delta(
                 session,
-                self._position_value(state, HUMAN_ID)
-                - self._position_value(before, HUMAN_ID),
+                self._position_value(state, session.human_id)
+                - self._position_value(before, session.human_id),
             )
         self._record_price_events(
             session,
@@ -1177,11 +1191,11 @@ class V2SessionStore:
             session.checkpoint is not None
             or state.phase != platform.Phase.SUPPLY.value
             or state.stage != "supply_card"
-            or state.current_player() != HUMAN_ID
+            or state.current_player() != session.human_id
         ):
             session.supply_plans.clear()
             return None
-        hand = state._hands[HUMAN_ID][:2]
+        hand = state._hands[session.human_id][:2]
         if len(hand) != 2:
             raise RuntimeError("Supply batch does not contain exactly two cards")
         refs = {card.card_id: self._card_ref(session, card.card_id) for card in hand}
@@ -1195,27 +1209,27 @@ class V2SessionStore:
         generated: dict[str, SupplyPlanRecord] = {}
         public_plans: list[SupplyPlanV2] = []
         _info, card_actions = platform.observe_game_state(
-            session.rule_set, state, HUMAN_ID
+            session.rule_set, state, session.human_id
         )
         for card_action in card_actions:
             first = _apply_player_action(
-                session.rule_set, state, HUMAN_ID, card_action.action_id
+                session.rule_set, state, session.human_id, card_action.action_id
             )
             selected = int(first._supply_choice or 0)
             up_card = hand[selected]
             down_card = hand[1 - selected]
             _info, up_actions = platform.observe_game_state(
-                session.rule_set, first, HUMAN_ID
+                session.rule_set, first, session.human_id
             )
             for up_action in up_actions:
                 second = _apply_player_action(
-                    session.rule_set, first, HUMAN_ID, up_action.action_id
+                    session.rule_set, first, session.human_id, up_action.action_id
                 )
                 _namespace, up_pile = session.rule_set.action_codec.decode(
                     up_action.action_id
                 )
                 _info, down_actions = platform.observe_game_state(
-                    session.rule_set, second, HUMAN_ID
+                    session.rule_set, second, session.human_id
                 )
                 for down_action in down_actions:
                     _namespace, down_pile = session.rule_set.action_codec.decode(
@@ -1252,7 +1266,7 @@ class V2SessionStore:
         if (
             session.checkpoint is not None
             or state.is_terminal()
-            or state.current_player() != HUMAN_ID
+            or state.current_player() != session.human_id
             or self._is_buffered_selling(session)
         ):
             session.decision_plans.clear()
@@ -1262,7 +1276,7 @@ class V2SessionStore:
             return None
 
         _information, first_actions = platform.observe_game_state(
-            session.rule_set, state, HUMAN_ID
+            session.rule_set, state, session.human_id
         )
         generated: dict[str, DecisionPlanRecord] = {}
         if state.stage == "demand_pile":
@@ -1272,13 +1286,13 @@ class V2SessionStore:
             public_plans: list[DemandDecisionPlanV2] = []
             for pile_action in first_actions:
                 first = _apply_player_action(
-                    session.rule_set, state, HUMAN_ID, pile_action.action_id
+                    session.rule_set, state, session.human_id, pile_action.action_id
                 )
                 _namespace, pile_id = session.rule_set.action_codec.decode(
                     pile_action.action_id
                 )
                 _information, bid_actions = platform.observe_game_state(
-                    session.rule_set, first, HUMAN_ID
+                    session.rule_set, first, session.human_id
                 )
                 for bid_action in bid_actions:
                     if bid_action.amount is None:
@@ -1309,14 +1323,14 @@ class V2SessionStore:
         public_impact_plans: list[MarketImpactDecisionPlanV2] = []
         for direction_action in first_actions:
             first = _apply_player_action(
-                session.rule_set, state, HUMAN_ID, direction_action.action_id
+                session.rule_set, state, session.human_id, direction_action.action_id
             )
             _namespace, direction_ordinal = session.rule_set.action_codec.decode(
                 direction_action.action_id
             )
             direction = "up" if int(direction_ordinal) == 0 else "down"
             _information, company_actions = platform.observe_game_state(
-                session.rule_set, first, HUMAN_ID
+                session.rule_set, first, session.human_id
             )
             for company_action in company_actions:
                 _namespace, company_id = session.rule_set.action_codec.decode(
@@ -1444,7 +1458,7 @@ class V2SessionStore:
     ) -> None:
         cards_by_ref = {
             self._card_ref(session, card.card_id): card
-            for card in session.state.players[HUMAN_ID].known_cards.values()
+            for card in session.state.players[session.human_id].known_cards.values()
         }
         # The authoritative commit relocates known cards, so player memory is
         # the safe source for resolving the opaque references after the swap.
@@ -1474,10 +1488,10 @@ class V2SessionStore:
         human_plan: SealedPlayerPlanV2 | None = None
         if sealed:
             buffer = self._ensure_sealed_buffer(session)
-            human_plan = buffer.plans[HUMAN_ID]
+            human_plan = buffer.plans[session.human_id]
             private_state = session.state if human_plan.complete else human_plan.state
         private_information, observed_legal = platform.observe_game_state(
-            session.rule_set, private_state, HUMAN_ID
+            session.rule_set, private_state, session.human_id
         )
         private_view_state = private_state
         private_view_information = private_information
@@ -1487,19 +1501,19 @@ class V2SessionStore:
             # only to validate the human's sealed decisions and legal actions.
             private_view_state = session.state
             private_view_information, _settled_legal = platform.observe_game_state(
-                session.rule_set, session.state, HUMAN_ID
+                session.rule_set, session.state, session.human_id
             )
         if (
             session.checkpoint is None
             and not human_plan
-            and session.state.current_player() == HUMAN_ID
+            and session.state.current_player() == session.human_id
         ):
             legal = observed_legal
         elif (
             session.checkpoint is None
             and human_plan is not None
             and not human_plan.complete
-            and private_state.current_player() == HUMAN_ID
+            and private_state.current_player() == session.human_id
         ):
             legal = observed_legal
 
@@ -1519,16 +1533,16 @@ class V2SessionStore:
             phase = str(public["phase"])
             phase_step = "private_selling"
             round_number = int(public["round"])
-            active_player_id = HUMAN_ID if human_plan and not human_plan.complete else None
+            active_player_id = session.human_id if human_plan and not human_plan.complete else None
         else:
             presentation = platform.get_presentation_state(
-                session.rule_set, session.state, HUMAN_ID
+                session.rule_set, session.state, session.human_id
             )
             phase = str(public["phase"])
             round_number = int(public["round"])
             active_player_id = presentation.current_actor
             phase_step = (
-                presentation.stage if active_player_id == HUMAN_ID else "waiting"
+                presentation.stage if active_player_id == session.human_id else "waiting"
             )
 
         live_markers = self._bid_markers(session)
@@ -1583,7 +1597,7 @@ class V2SessionStore:
             round=round_number,
             phase=phase,
             phase_step=phase_step,
-            viewer=ViewerV2(),
+            viewer=ViewerV2(player_id=session.human_id),
             active_player_id=active_player_id,
             companies=self._companies(session, public),
             stockpiles=stockpiles,
@@ -1661,7 +1675,7 @@ class V2SessionStore:
             (marker.player_id, marker.marker_index): marker
             for marker in presentation.stockpile_markers
         }
-        for player_id in (HUMAN_ID, COMPUTER_ID):
+        for player_id in (session.human_id, session.computer_id):
             for marker_index in range(session.rule_set.meeples_per_player):
                 marker_key = (player_id, marker_index)
                 leading = occupied.get(marker_key)
@@ -1806,35 +1820,43 @@ class V2SessionStore:
         human_plan: SealedPlayerPlanV2 | None,
     ) -> list[HumanPublicPlayerV2 | ComputerPublicPlayerV2]:
         human_status = self._player_status(
-            HUMAN_ID, active_player_id, session.state, human_plan
+            session.human_id,
+            active_player_id,
+            session.state,
+            human_plan,
+            human_id=session.human_id,
         )
         computer_status = self._player_status(
-            COMPUTER_ID, active_player_id, session.state, None
+            session.computer_id,
+            active_player_id,
+            session.state,
+            None,
+            human_id=session.human_id,
         )
-        human_cash = int(session.state.players[HUMAN_ID].cash)
-        computer_cash = int(session.state.players[COMPUTER_ID].cash)
+        human_cash = int(session.state.players[session.human_id].cash)
+        computer_cash = int(session.state.players[session.computer_id].cash)
         return [
             HumanPublicPlayerV2(
-                player_id=HUMAN_ID,
-                name=PLAYER_NAMES[HUMAN_ID],
+                player_id=session.human_id,
+                name=self._player_display_name(session, session.human_id),
                 cash_thousands=human_cash,
-                cash_delta_thousands=session.latest_cash_deltas[HUMAN_ID],
+                cash_delta_thousands=session.latest_cash_deltas[session.human_id],
                 position_value_thousands=self._position_value(
-                    session.state, HUMAN_ID
+                    session.state, session.human_id
                 ),
                 position_delta_thousands=session.latest_human_position_delta,
-                active=active_player_id == HUMAN_ID,
+                active=active_player_id == session.human_id,
                 status=human_status,
-                bid_markers=[item for item in markers if item.player_id == HUMAN_ID],
+                bid_markers=[item for item in markers if item.player_id == session.human_id],
             ),
             ComputerPublicPlayerV2(
-                player_id=COMPUTER_ID,
-                name=PLAYER_NAMES[COMPUTER_ID],
+                player_id=session.computer_id,
+                name=self._player_display_name(session, session.computer_id),
                 cash_thousands=computer_cash,
-                cash_delta_thousands=session.latest_cash_deltas[COMPUTER_ID],
-                active=active_player_id == COMPUTER_ID,
+                cash_delta_thousands=session.latest_cash_deltas[session.computer_id],
+                active=active_player_id == session.computer_id,
                 status=computer_status,
-                bid_markers=[item for item in markers if item.player_id == COMPUTER_ID],
+                bid_markers=[item for item in markers if item.player_id == session.computer_id],
             ),
         ]
 
@@ -1844,8 +1866,10 @@ class V2SessionStore:
         active_player_id: int | None,
         state: platform.GameState,
         human_plan: SealedPlayerPlanV2 | None,
+        *,
+        human_id: int,
     ) -> str:
-        if human_plan is not None and player_id == HUMAN_ID:
+        if human_plan is not None and player_id == human_id:
             return "WAIT" if human_plan.complete else "SELL"
         if active_player_id != player_id:
             return "WAIT"
@@ -2018,10 +2042,10 @@ class V2SessionStore:
             if decision_batch.kind == "demand":
                 return PendingDecisionV2(kind="bid_pile", prompt="BID")
             return PendingDecisionV2(kind="action_card", prompt="IMPACT")
-        if session.state.current_player() != HUMAN_ID or not legal_actions:
+        if session.state.current_player() != session.human_id or not legal_actions:
             return PendingDecisionV2(kind="waiting", prompt="COMPUTER")
         presentation = platform.get_presentation_state(
-            session.rule_set, state, HUMAN_ID
+            session.rule_set, state, session.human_id
         )
         kind, prompt = {
             "demand_pile": ("bid_pile", "BID"),
@@ -2120,7 +2144,7 @@ class V2SessionStore:
         distinct = sorted(set(result.final_cash_by_player.values()), reverse=True)
         ranks = {value: distinct.index(value) + 1 for value in distinct}
         players: list[TerminalPlayerV2] = []
-        for player_id in (HUMAN_ID, COMPUTER_ID):
+        for player_id in (session.human_id, session.computer_id):
             detail = detail_by_player.get(player_id)
             if detail is not None:
                 lines = [
@@ -2157,16 +2181,20 @@ class V2SessionStore:
                 final_cash = int(result.final_cash_by_player[player_id])
                 rank = ranks[final_cash]
                 winner = player_id in result.winner_ids
+            # Cash is post-sell-off / post-movement cash on hand. Position is
+            # remaining mark-to-market holdings before terminal liquidation
+            # converts them into final cash. Prefer the live portfolio cash so
+            # the bar chart matches the seat's public CASH when fees are off.
+            cash_before = int(session.state.players[player_id].cash)
+            if cash_before + liquidation_value != final_cash:
+                # Fee debts / majority bonuses adjust gross terminal cash; keep
+                # the three displayed amounts reconciling to final_cash.
+                cash_before = final_cash - liquidation_value
             players.append(
                 TerminalPlayerV2(
                     player_id=player_id,
-                    player_name=PLAYER_NAMES[player_id],
-                    # Final fee debts settle against gross terminal cash.  This
-                    # is therefore the net cash immediately before stock
-                    # liquidation, so the three displayed amounts reconcile.
-                    cash_before_liquidation_thousands=(
-                        final_cash - liquidation_value
-                    ),
+                    player_name=self._player_display_name(session, player_id),
+                    cash_before_liquidation_thousands=cash_before,
                     liquidation_value_thousands=liquidation_value,
                     final_cash_thousands=final_cash,
                     rank=rank,

@@ -96,9 +96,9 @@ class DeepCFRConfig:
     learning_curve_bootstrap_resamples: int = 10_000
     learning_curve_checkpoint_count: int = 10
     until_win_rate: float | None = None
-    eval_every_traversals: int | None = None
+    eval_every_iterations: int | None = None
     eval_games: int | None = None
-    max_traversals: int | None = None
+    max_iterations: int | None = None
     until_win_rate_consecutive: int = 2
     seed: int = 42
     device: Literal["auto", "cpu", "cuda", "mps"] = "auto"
@@ -145,16 +145,17 @@ class DeepCFRConfig:
 
     def _validate_until_win_rate_options(self) -> None:
         until = self.until_win_rate
-        eval_every = self.eval_every_traversals
+        eval_every = self.eval_every_iterations
         eval_games = self.eval_games
-        max_traversals = self.max_traversals
+        max_iterations = self.max_iterations
         any_until_option = any(
-            value is not None for value in (until, eval_every, eval_games, max_traversals)
+            value is not None
+            for value in (until, eval_every, eval_games, max_iterations)
         )
         if until is None:
             if any_until_option:
                 raise ValueError(
-                    "eval-every, eval-games, and max-traversals require --until-win-rate"
+                    "eval-every, eval-games, and max-iterations require --until-win-rate"
                 )
             return
         if isinstance(until, bool) or not isinstance(until, (int, float)):
@@ -165,20 +166,14 @@ class DeepCFRConfig:
         object.__setattr__(self, "until_win_rate", until)
 
         if eval_every is None:
-            eval_every = 10_000
+            eval_every = 100
         if (
             isinstance(eval_every, bool)
             or not isinstance(eval_every, int)
             or eval_every < 1
         ):
-            raise ValueError("eval_every_traversals must be a positive integer")
-        per_iteration = self.traversals_per_iteration()
-        if eval_every % per_iteration != 0:
-            raise ValueError(
-                "eval_every_traversals must be divisible by "
-                f"traversals_per_player * 2 ({per_iteration})"
-            )
-        object.__setattr__(self, "eval_every_traversals", int(eval_every))
+            raise ValueError("eval_every_iterations must be a positive integer")
+        object.__setattr__(self, "eval_every_iterations", int(eval_every))
 
         if eval_games is None:
             eval_games = 2_000
@@ -191,32 +186,24 @@ class DeepCFRConfig:
             raise ValueError("eval_games must be a positive even integer")
         object.__setattr__(self, "eval_games", int(eval_games))
 
-        if max_traversals is None:
-            raise ValueError("max_traversals is required when until_win_rate is set")
+        if max_iterations is None:
+            max_iterations = 10_000
         if (
-            isinstance(max_traversals, bool)
-            or not isinstance(max_traversals, int)
-            or max_traversals < 1
+            isinstance(max_iterations, bool)
+            or not isinstance(max_iterations, int)
+            or max_iterations < 1
         ):
-            raise ValueError("max_traversals must be a positive integer")
-        if max_traversals < eval_every:
-            raise ValueError("max_traversals must be at least eval_every_traversals")
-        if max_traversals % per_iteration != 0:
+            raise ValueError("max_iterations must be a positive integer")
+        if max_iterations < int(eval_every):
             raise ValueError(
-                "max_traversals must be divisible by "
-                f"traversals_per_player * 2 ({per_iteration})"
+                "max_iterations must be at least eval_every_iterations "
+                f"({int(eval_every)})"
             )
-        object.__setattr__(self, "max_traversals", int(max_traversals))
+        object.__setattr__(self, "max_iterations", int(max_iterations))
 
     @property
     def until_win_rate_enabled(self) -> bool:
         return self.until_win_rate is not None
-
-    @property
-    def eval_every_iterations(self) -> int | None:
-        if self.eval_every_traversals is None:
-            return None
-        return int(self.eval_every_traversals) // self.traversals_per_iteration()
 
     @property
     def learning_curve_evaluation_pairs(self) -> int:

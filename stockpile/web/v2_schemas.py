@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 SCHEMA_VERSION_V2 = "2.0"
-BROWSER_ROUND_COUNT = 2
+BROWSER_ROUND_COUNT = 1
 
 
 class StrictModelV2(BaseModel):
@@ -36,7 +36,7 @@ class OptionDescriptorV2(StrictModelV2):
 class SetupResponseV2(StrictModelV2):
     schema_version: Literal["2.0"] = SCHEMA_VERSION_V2
     mode: Literal["lite"] = "lite"
-    round_count: Literal[2] = BROWSER_ROUND_COUNT
+    round_count: Literal[1] = BROWSER_ROUND_COUNT
     options: list[OptionDescriptorV2]
 
 
@@ -348,12 +348,12 @@ class TerminalResultsV2(StrictModelV2):
 class ConfigurationV2(StrictModelV2):
     mode: Literal["lite"] = "lite"
     player_count: Literal[2] = 2
-    round_count: Literal[2] = BROWSER_ROUND_COUNT
+    round_count: Literal[1] = BROWSER_ROUND_COUNT
     options: LiteOptionsV2
 
 
 class ViewerV2(StrictModelV2):
-    player_id: Literal[0] = 0
+    player_id: Literal[0, 1]
     name: Literal["YOU"] = "YOU"
 
 
@@ -363,7 +363,7 @@ class GameViewV2(StrictModelV2):
     revision: int
     configuration: ConfigurationV2
     round: int
-    total_rounds: Literal[2] = BROWSER_ROUND_COUNT
+    total_rounds: Literal[1] = BROWSER_ROUND_COUNT
     phase: str
     phase_step: str
     viewer: ViewerV2

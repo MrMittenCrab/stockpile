@@ -164,7 +164,7 @@ class TerminalTests(unittest.TestCase):
         self.assertIn("numbered managed run", rendered)
         self.assertIn("--until-win-rate", rendered)
         self.assertIn("--eval-every", rendered)
-        self.assertIn("--max-traversals", rendered)
+        self.assertIn("--max-iterations", rendered)
 
     def test_analyze_requires_exactly_one_source_form_and_valid_confidence(self):
         invalid = (

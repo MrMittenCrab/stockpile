@@ -426,9 +426,9 @@ class TrainerSmokeTests(unittest.TestCase):
                 learning_curve_pairs=1,
                 learning_curve_bootstrap_resamples=16,
                 until_win_rate=0.7,
-                eval_every_traversals=2,
+                eval_every_iterations=1,
                 eval_games=2,
-                max_traversals=20,
+                max_iterations=10,
                 seed=17,
                 device="cpu",
                 output_dir=Path(temporary),
@@ -484,7 +484,7 @@ class TrainerSmokeTests(unittest.TestCase):
             self.assertTrue((archived[-1] / "full.pt").is_file())
             self.assertTrue((archived[-1] / "policy.pt").is_file())
 
-    def test_until_win_rate_stops_at_max_traversals_without_target(self):
+    def test_until_win_rate_stops_at_max_iterations_without_target(self):
         from stockpile.training.trainer import DeepCFRTrainer
 
         configuration = stockpile.resolve_configuration("lite", round_count=1)
@@ -501,9 +501,9 @@ class TrainerSmokeTests(unittest.TestCase):
                 evaluation_pairs=1,
                 learning_curve_bootstrap_resamples=8,
                 until_win_rate=0.95,
-                eval_every_traversals=2,
+                eval_every_iterations=1,
                 eval_games=2,
-                max_traversals=6,
+                max_iterations=3,
                 seed=3,
                 device="cpu",
                 output_dir=Path(temporary),
@@ -549,7 +549,7 @@ class TrainerSmokeTests(unittest.TestCase):
             self.assertFalse(result.target_reached)
             self.assertEqual(result.cumulative_traversals, 6)
             self.assertIsNotNone(result.final_win_rate)
-            self.assertIn("MAX TRAVERSALS REACHED", stream.getvalue())
+            self.assertIn("MAX ITERATIONS REACHED", stream.getvalue())
 
 
 if __name__ == "__main__":

@@ -457,17 +457,38 @@ function Delta({ value }: { value: number | null }) {
 }
 
 function Players({ view }: { view: GameView }) {
+  // During play, COMPUTER holdings stay private. At GAME END the terminal
+  // breakdown is public: show each seat's pre-liquidation cash and remaining
+  // mark-to-market position (after sell-off, before forced final liquidation).
+  const terminalByPlayer = new Map(
+    (view.terminal_results?.players ?? []).map((player) => [player.player_id, player]),
+  );
   return (
     <section className={`${styles.module} ${styles.players}`} aria-label="Players">
       <SectionLabel>PLAYERS</SectionLabel>
       <div className={styles.playerList}>
-        {[...view.players].sort((a, b) => a.role === "human" ? -1 : b.role === "human" ? 1 : 0).map((player) => (
-          <div className={styles.player} key={player.player_id} data-player-role={player.role}>
-            <span>{player.role === "human" ? "YOU" : "COMPUTER"}</span>
-            <div className={styles.metric} data-player-metric="cash"><span>CASH</span><span data-player-value-slot>{money(player.cash_thousands)}</span><Delta value={player.cash_delta_thousands} /></div>
-            {player.role === "human" && <div className={styles.metric} data-player-metric="position"><span>POSITION</span><span data-player-value-slot>{money(player.position_value_thousands)}</span><Delta value={player.position_delta_thousands} /></div>}
-          </div>
-        ))}
+        {[...view.players].sort((a, b) => a.role === "human" ? -1 : b.role === "human" ? 1 : 0).map((player) => {
+          const terminal = terminalByPlayer.get(player.player_id);
+          const cash = terminal?.cash_before_liquidation_thousands ?? player.cash_thousands;
+          const cashDelta = terminal ? null : player.cash_delta_thousands;
+          const position = terminal
+            ? terminal.liquidation_value_thousands
+            : player.role === "human"
+              ? player.position_value_thousands
+              : null;
+          const positionDelta = terminal || player.role !== "human"
+            ? null
+            : player.position_delta_thousands;
+          return (
+            <div className={styles.player} key={player.player_id} data-player-role={player.role}>
+              <span>{player.role === "human" ? "YOU" : "COMPUTER"}</span>
+              <div className={styles.metric} data-player-metric="cash"><span>CASH</span><span data-player-value-slot>{money(cash)}</span><Delta value={cashDelta} /></div>
+              {position !== null && (
+                <div className={styles.metric} data-player-metric="position"><span>POSITION</span><span data-player-value-slot>{money(position)}</span><Delta value={positionDelta} /></div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </section>
   );
@@ -707,6 +728,8 @@ function ActionDock({ view, supply, decision, contextLabel, contextEnabled, cont
 
 function TerminalChart({ view }: { view: GameView }) {
   const results = view.terminal_results!;
+  // Bars are cash after sell-off / movement, plus remaining stock still held
+  // before terminal liquidation converts that position into final cash.
   const minimum = Math.min(0, ...results.players.map((player) => player.cash_before_liquidation_thousands));
   const maximum = Math.max(0, ...results.players.flatMap((player) => [
     player.liquidation_value_thousands,
@@ -722,13 +745,31 @@ function TerminalChart({ view }: { view: GameView }) {
         const cash = player.cash_before_liquidation_thousands;
         const position = player.liquidation_value_thousands;
         return (
-          <div className={styles.chartRow} key={player.player_id}>
-            <span>{player.player_id === view.viewer.player_id ? "YOU" : "COMPUTER"}</span>
-            <span className={styles.chartTrack} role="img" aria-label={`${player.player_name}: position ${money(position)}, cash ${money(cash)}, final cash ${money(player.final_cash_thousands)}`}>
-              <span className={styles.positionSegment} data-chart-segment="position" style={{ left: percent(zero), width: percent(position) }} />
-              <span className={styles.cashSegment} data-chart-segment="cash" style={cash >= 0
-                ? { left: percent(zero + position), width: percent(cash) }
-                : { left: percent(zero + cash), width: percent(-cash) }} />
+          <div className={styles.chartRow} key={player.player_id} data-chart-player={player.player_id === view.viewer.player_id ? "human" : "computer"}>
+            <span className={styles.chartLabel}>{player.player_id === view.viewer.player_id ? "YOU" : "COMPUTER"}</span>
+            <span
+              className={styles.chartTrack}
+              role="img"
+              aria-label={`${player.player_name}: position ${money(position)}, cash ${money(cash)}, final cash ${money(player.final_cash_thousands)}`}
+              data-chart-position={position}
+              data-chart-cash={cash}
+            >
+              <span
+                className={styles.positionSegment}
+                data-chart-segment="position"
+                style={{
+                  left: percent(zero),
+                  width: percent(position),
+                  minWidth: position > 0 ? 2 : undefined,
+                }}
+              />
+              <span
+                className={styles.cashSegment}
+                data-chart-segment="cash"
+                style={cash >= 0
+                  ? { left: percent(zero + position), width: percent(cash), minWidth: cash > 0 ? 2 : undefined }
+                  : { left: percent(zero + cash), width: percent(-cash), minWidth: 2 }}
+              />
               <span className={styles.zeroLine} style={{ left: percent(zero) }} />
             </span>
           </div>

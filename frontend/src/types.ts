@@ -4,7 +4,7 @@ export type LiteOptions = Record<LiteOptionKey, boolean>;
 export interface SetupResponse {
   schema_version: "2.0";
   mode: "lite";
-  round_count: 2;
+  round_count: 1;
   options: Array<{ key: LiteOptionKey; label: string; default: boolean }>;
 }
 
@@ -192,12 +192,12 @@ export interface GameView {
   schema_version: "2.0";
   game_id: string;
   revision: number;
-  configuration: { mode: "lite"; player_count: 2; round_count: 2; options: LiteOptions };
+  configuration: { mode: "lite"; player_count: 2; round_count: 1; options: LiteOptions };
   round: number;
   total_rounds: number;
   phase: string;
   phase_step: string;
-  viewer: { player_id: 0; name: "YOU" };
+  viewer: { player_id: 0 | 1; name: "YOU" };
   active_player_id: number | null;
   companies: Company[];
   stockpiles: Stockpile[];

@@ -266,6 +266,16 @@ class DeepCFRTrainer:
         self._until_target_reached = False
         self._stop_training = False
         self._last_evaluation_win_rate: float | None = None
+        self._progress_is_tty = False
+        try:
+            self._progress_is_tty = bool(self.output.isatty())
+        except (AttributeError, OSError):
+            self._progress_is_tty = False
+        self._progress_line_open = False
+        self._progress_last_bucket = -1
+        self._progress_completed = 0
+        self._progress_total = 1
+        self._epoch_started_at = time.perf_counter()
 
     @staticmethod
     def _validate_configuration(
@@ -1127,6 +1137,7 @@ class DeepCFRTrainer:
                 f"{round_count} round(s)",
                 file=self.output,
             )
+            self._epoch_started_at = time.perf_counter()
             while self._stage_should_continue(stage_index):
                 started = time.perf_counter()
                 self.stage_iteration += 1
@@ -1233,11 +1244,9 @@ class DeepCFRTrainer:
                 }
                 self._append_metric(metric)
                 iteration_budget = self._stage_iteration_budget(stage_index)
-                print(
-                    f"  iteration {self.stage_iteration}/"
-                    f"{iteration_budget} "
-                    f"strategy_loss={metric['strategy_loss']!r}",
-                    file=self.output,
+                self._render_training_progress(
+                    self.stage_iteration,
+                    iteration_budget,
                 )
                 due_until_eval = self._until_win_rate_evaluation_due()
                 if (
@@ -1254,6 +1263,8 @@ class DeepCFRTrainer:
                 self._evaluate_learning_curve_if_due(stage_index, round_count)
                 if self._stop_training:
                     break
+
+            self._finish_training_progress()
 
             if self.config.until_win_rate_enabled:
                 if (
@@ -1324,10 +1335,11 @@ class DeepCFRTrainer:
             and self._last_evaluation_win_rate is not None
         ):
             print(
-                "MAX TRAVERSALS REACHED: "
+                "MAX ITERATIONS REACHED: "
                 f"{100.0 * self._last_evaluation_win_rate:.1f}% win rate vs random "
-                f"after {cumulative:,} traversals "
-                f"(target {100.0 * float(self.config.until_win_rate):.1f}%)",
+                f"after {self.global_iteration:,} iterations "
+                f"({cumulative:,} traversals; "
+                f"target {100.0 * float(self.config.until_win_rate):.1f}%)",
                 file=self.output,
             )
 
@@ -1357,6 +1369,9 @@ class DeepCFRTrainer:
             return
         assert self.stage_configuration is not None
         assert self.strategy_network is not None
+
+        # Wall time for the training block since the last evaluation (or stage start).
+        epoch_seconds = time.perf_counter() - self._epoch_started_at
 
         trainer_rng_state = self.rng.getstate()
         python_rng_state = random.getstate()
@@ -1430,29 +1445,20 @@ class DeepCFRTrainer:
         wrote = self.learning_curve.append(record)
         if wrote:
             self._last_evaluation_win_rate = float(record["win_rate"])
-            if self.config.until_win_rate_enabled:
-                print(
-                    "  evaluation "
-                    f"traversals={record['cumulative_traversals']:,} "
-                    f"games={record['evaluation_games']} "
-                    f"wins={record['wins']} losses={record['losses']} "
-                    f"ties={record['ties']} "
-                    f"win_rate={record['win_rate']:.4f} "
-                    f"mean_utility={record['mean_utility']:.4f} "
-                    f"ci95=[{record['win_rate_ci95_lower']:.4f}, "
-                    f"{record['win_rate_ci95_upper']:.4f}]",
-                    file=self.output,
-                )
-            else:
-                print(
-                    "  learning-curve "
-                    f"iter={self.stage_iteration} "
-                    f"traversals={record['cumulative_traversals']} "
-                    f"score={record['score']:.4f} "
-                    f"ci95=[{record['score_ci95_lower']:.4f}, "
-                    f"{record['score_ci95_upper']:.4f}]",
-                    file=self.output,
-                )
+            self._emit_progress_log(
+                "  evaluation "
+                f"iteration={record['global_iteration']} "
+                f"epoch={self._format_duration(epoch_seconds)} "
+                f"traversals={record['cumulative_traversals']:,} "
+                f"games={record['evaluation_games']} "
+                f"wins={record['wins']} losses={record['losses']} "
+                f"ties={record['ties']} "
+                f"win_rate={100.0 * float(record['win_rate']):.1f}% "
+                f"mean_utility={record['mean_utility']:.4f} "
+                f"ci95=[{100.0 * float(record['win_rate_ci95_lower']):.1f}%, "
+                f"{100.0 * float(record['win_rate_ci95_upper']):.1f}%]",
+                restore_progress=True,
+            )
             if self.config.until_win_rate_enabled:
                 self._append_metric(
                     {
@@ -1461,6 +1467,7 @@ class DeepCFRTrainer:
                     }
                 )
                 self._maybe_stop_for_until_win_rate(record)
+        self._epoch_started_at = time.perf_counter()
 
     def _learning_curve_evaluation_due(self, stage_index: int) -> bool:
         if self.config.until_win_rate_enabled:
@@ -1472,21 +1479,104 @@ class DeepCFRTrainer:
             return False
         every = self.config.eval_every_iterations
         assert every is not None
-        return self.stage_iteration > 0 and self.stage_iteration % every == 0
+        return self.global_iteration > 0 and self.global_iteration % every == 0
 
-    def _stage_iteration_budget(self, stage_index: int) -> str | int:
+    def _stage_iteration_budget(self, stage_index: int) -> int:
         if not self.config.until_win_rate_enabled:
-            return self.config.iterations_per_stage
+            return int(self.config.iterations_per_stage)
         if stage_index < len(self.config.curriculum.rounds) - 1:
-            return self.config.iterations_per_stage
-        assert self.config.max_traversals is not None
-        remaining_traversals = max(
-            0,
-            int(self.config.max_traversals)
-            - self.global_iteration * self.config.traversals_per_iteration(),
+            return int(self.config.iterations_per_stage)
+        assert self.config.max_iterations is not None
+        remaining = max(0, int(self.config.max_iterations) - self.global_iteration)
+        return int(self.stage_iteration + remaining)
+
+    def _render_training_progress(
+        self,
+        completed: int,
+        total: int | str,
+    ) -> None:
+        """Overwrite a single progress line while training between evaluations."""
+
+        try:
+            total_count = max(1, int(total))
+        except (TypeError, ValueError):
+            total_count = max(1, int(completed))
+        completed_count = max(0, min(int(completed), total_count))
+        self._progress_completed = completed_count
+        self._progress_total = total_count
+        fraction = completed_count / total_count
+        width = 28
+        filled = int(round(fraction * width))
+        bar = "#" * filled + "-" * (width - filled)
+        line = (
+            f"  training [{bar}] "
+            f"{100.0 * fraction:5.1f}%  {completed_count}/{total_count}"
         )
-        remaining_iterations = remaining_traversals // self.config.traversals_per_iteration()
-        return self.stage_iteration + remaining_iterations
+        if self._progress_is_tty:
+            # Keep the bar on one bottom line; clear any leftover width.
+            self.output.write("\r" + line + "\033[K")
+            self.output.flush()
+            self._progress_line_open = True
+            return
+        # Non-TTY logs stay sparse: mark every 10% boundary and the finish.
+        previous = getattr(self, "_progress_last_bucket", -1)
+        bucket = int(fraction * 10)
+        if completed_count >= total_count or bucket != previous:
+            print(line, file=self.output)
+            self._progress_last_bucket = bucket
+            self._progress_line_open = False
+
+    @staticmethod
+    def _format_duration(seconds: float) -> str:
+        """Format a wall-clock duration as compact seconds/minutes/hours."""
+
+        total = max(0.0, float(seconds))
+        if total < 60.0:
+            if total < 10.0:
+                return f"{total:.1f}s"
+            return f"{total:.0f}s"
+        whole = int(round(total))
+        minutes, secs = divmod(whole, 60)
+        if minutes < 60:
+            return f"{minutes}m {secs:02d}s" if secs else f"{minutes}m"
+        hours, minutes = divmod(minutes, 60)
+        if minutes:
+            return f"{hours}h {minutes}m"
+        return f"{hours}h"
+
+    def _clear_training_progress_line(self) -> None:
+        """Erase an in-place progress line without committing it to the log."""
+
+        if self._progress_is_tty and self._progress_line_open:
+            self.output.write("\r\033[K")
+            self.output.flush()
+            self._progress_line_open = False
+
+    def _emit_progress_log(
+        self,
+        message: str,
+        *,
+        restore_progress: bool,
+    ) -> None:
+        """Print a permanent line; optionally redraw the progress bar below it."""
+
+        if self._progress_is_tty and self._progress_line_open:
+            self._clear_training_progress_line()
+        elif self._progress_line_open:
+            self._finish_training_progress()
+        print(message, file=self.output)
+        if restore_progress and self._progress_is_tty:
+            self._render_training_progress(
+                self._progress_completed,
+                self._progress_total,
+            )
+
+    def _finish_training_progress(self) -> None:
+        if self._progress_line_open:
+            self.output.write("\n")
+            self.output.flush()
+            self._progress_line_open = False
+        self._progress_last_bucket = -1
 
     def _stage_should_continue(self, stage_index: int) -> bool:
         if self._stop_training:
@@ -1495,11 +1585,8 @@ class DeepCFRTrainer:
             return self.stage_iteration < self.config.iterations_per_stage
         if stage_index < len(self.config.curriculum.rounds) - 1:
             return self.stage_iteration < self.config.iterations_per_stage
-        assert self.config.max_traversals is not None
-        next_traversals = (
-            self.global_iteration + 1
-        ) * self.config.traversals_per_iteration()
-        return next_traversals <= int(self.config.max_traversals)
+        assert self.config.max_iterations is not None
+        return (self.global_iteration + 1) <= int(self.config.max_iterations)
 
     def _cumulative_traversal_count(self, stage_index: int) -> int:
         if self.config.until_win_rate_enabled:
@@ -1513,9 +1600,10 @@ class DeepCFRTrainer:
 
     def _maybe_stop_for_until_win_rate(self, record: dict[str, Any]) -> None:
         assert self.config.until_win_rate is not None
-        assert self.config.max_traversals is not None
+        assert self.config.max_iterations is not None
         win_rate = float(record["win_rate"])
         traversals = int(record["cumulative_traversals"])
+        iteration = int(record["global_iteration"])
         required = int(self.config.until_win_rate_consecutive)
         streak = self.learning_curve.consecutive_win_rate_streak(
             float(self.config.until_win_rate)
@@ -1523,14 +1611,14 @@ class DeepCFRTrainer:
         if streak >= required:
             self._until_target_reached = True
             self._stop_training = True
-            print(
+            self._emit_progress_log(
                 "TARGET REACHED: "
                 f"{100.0 * win_rate:.1f}% win rate vs random "
-                f"after {traversals:,} traversals",
-                file=self.output,
+                f"after {iteration:,} iterations ({traversals:,} traversals)",
+                restore_progress=False,
             )
             return
-        if traversals >= int(self.config.max_traversals):
+        if iteration >= int(self.config.max_iterations):
             self._stop_training = True
 
     def _write_learning_curve_plot(self) -> Path | None:

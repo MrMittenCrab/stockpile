@@ -5,7 +5,7 @@ import type { GameView, SetupResponse } from "../types";
 export const setupResponse: SetupResponse = {
   schema_version: "2.0",
   mode: "lite",
-  round_count: 2,
+  round_count: 1,
   options: [
     { key: "trading_fees", label: "Trading Fees", default: false },
     { key: "dividends", label: "Dividends", default: false },
@@ -18,9 +18,9 @@ export const gameView: GameView = {
   schema_version: "2.0",
   game_id: "unusual",
   revision: 7,
-  configuration: { mode: "lite", player_count: 2, round_count: 2, options },
+  configuration: { mode: "lite", player_count: 2, round_count: 1, options },
   round: 1,
-  total_rounds: 2,
+  total_rounds: 1,
   phase: "demand",
   phase_step: "demand_bid",
   viewer: { player_id: 0, name: "YOU" },

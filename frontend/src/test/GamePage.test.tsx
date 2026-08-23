@@ -31,7 +31,8 @@ describe("disciplined Stockpile Trainer game surface", () => {
     expect(gameCss).toMatch(/\[data-card-scale="portfolio"\] \.cardValue,\s*\[data-card-scale="active"\] \.cardValue,\s*\[data-card-scale="information"\] \.cardValue\s*\{[^}]*right:\s*3px;[^}]*bottom:\s*2px;[^}]*font-size:\s*var\(--secondary-size\)/s);
     expect(gameCss).toMatch(/\.stack\s*\{[^}]*width:\s*104px;[^}]*height:\s*139px;/s);
     expect(gameCss).not.toContain("--stack-count");
-    expect(gameCss).toContain("grid-template-columns: minmax(0, 74px) minmax(0, 1fr)");
+    expect(gameCss).toContain("grid-template-columns: 34px 74px minmax(0, 1fr)");
+    expect(gameCss).toMatch(/\.chartLabel\s*\{\s*grid-column:\s*2;/);
     expect(gameCss).toMatch(/\.dockControls\s*\{[^}]*gap:\s*8px;/s);
     expect(gameCss).toContain("grid-template-columns: 20px minmax(0, 1fr) 12ch 4ch");
     expect(gameCss).toContain("grid-template-columns: 8ch 6ch 7ch");
@@ -504,6 +505,12 @@ describe("disciplined Stockpile Trainer game surface", () => {
     expect(chart).toHaveAttribute("data-chart-min", "-5");
     expect(chart.querySelectorAll('[data-chart-segment="position"]')).toHaveLength(2);
     expect(chart.querySelectorAll('[data-chart-segment="cash"]')).toHaveLength(2);
+    const computerRow = chart.querySelector('[data-chart-player="computer"]');
+    expect(computerRow?.querySelector("[data-chart-position]")?.getAttribute("data-chart-position")).toBe("90");
+    expect(computerRow?.querySelector("[data-chart-cash]")?.getAttribute("data-chart-cash")).toBe("-5");
+    const players = screen.getByLabelText("Players");
+    expect(within(players).getByText("COMPUTER").closest("[data-player-role]")!.querySelector('[data-player-metric="position"]')).toHaveTextContent("POSITION");
+    expect(within(players).getByText("COMPUTER").closest("[data-player-role]")!.querySelector('[data-player-metric="position"]')).toHaveTextContent("$90K");
     const calculations = field.querySelector("[class*='rankings']");
     expect(calculations).not.toBeNull();
     expect(calculations!.compareDocumentPosition(chart) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
