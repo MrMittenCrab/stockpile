@@ -27,15 +27,16 @@ Lite rules.
 ## Play
 
 Local one-round Stockpile Lite between `YOU` and `COMPUTER`. The computer loads
-`round_01/policy.pt` from a managed Deep CFR run under
-`artifacts/deep_cfr/lite/` (override with `--policy`, `--run`, or
-`--policy random`). Lite+ options that leave the trained Lite rules fall back to
-uniform legal actions. Games are in-memory only.
+the bundled Deep CFR average policy at
+`stockpile/artifacts/deep_cfr/lite/run_03/round_01/policy.pt` (the latest
+published Lite run). Override with `--policy`, `--run`, or `--policy random`.
+Lite+ options that leave the trained Lite rules fall back to uniform legal
+actions. Games are in-memory only.
 
 ```console
 .venv/bin/python -m pip install -r requirements-web.txt
-npm --prefix frontend install
-npm --prefix frontend exec -- playwright install chromium
+npm --prefix stockpile/frontend install
+npm --prefix stockpile/frontend exec -- playwright install chromium
 python -m stockpile play
 ```
 
@@ -57,8 +58,8 @@ python -m stockpile solve --mode lite --rounds 1 --smoke
 python -m stockpile solve --mode lite --rounds 6
 ```
 
-Runs land under `artifacts/deep_cfr/lite/run_XX` (smoke under
-`artifacts/deep_cfr/smoke/`). Use `--run INT` or `--output-dir PATH`.
+Runs land under `stockpile/artifacts/deep_cfr/lite/run_XX` (smoke under
+`stockpile/artifacts/deep_cfr/smoke/`). Use `--run INT` or `--output-dir PATH`.
 
 Default curriculum: `1,2,3,4,6`. Train until a win-rate target vs random:
 
@@ -79,7 +80,7 @@ Report stored evaluation, learning-curve history, or sampled regret for one run:
 
 ```console
 python -m stockpile analyze --mode lite --run 1
-python -m stockpile analyze --output-dir artifacts/deep_cfr/lite/run_01
+python -m stockpile analyze --output-dir stockpile/artifacts/deep_cfr/lite/run_01
 python -m stockpile analyze --method learning-curve --mode lite --run 1
 python -m stockpile analyze --method regret --mode lite --run 1 --confidence 0.90
 ```
@@ -94,10 +95,10 @@ exploitability or NashConv.
 
 ```console
 python -m unittest discover -s stockpile/tests -v
-npm --prefix frontend run typecheck
-npm --prefix frontend test
-npm --prefix frontend run build
-npm --prefix frontend run e2e
+npm --prefix stockpile/frontend run typecheck
+npm --prefix stockpile/frontend test
+npm --prefix stockpile/frontend run build
+npm --prefix stockpile/frontend run e2e
 ```
 
 ## Layout
@@ -107,6 +108,8 @@ npm --prefix frontend run e2e
 - `stockpile/complexity_cache.py` — remembered infoset-complexity results
 - `stockpile/training/` — Deep CFR trainer, encoder, policy, evaluation
 - `stockpile/web/` — local FastAPI sessions and privacy-safe views
-- `frontend/` — Vite/React `YOU` vs `COMPUTER` client
+- `stockpile/frontend/` — Vite/React `YOU` vs `COMPUTER` client
+- `stockpile/artifacts/deep_cfr/lite/run_03/` — bundled play policy (`policy.pt`)
+- `stockpile/writeup/` — local write-up notebook and figures (gitignored)
 - `stockpile/tests/` — engine, CLI, web, and training tests
 - `stockpile/docs/` — bundled Stockpile rules references

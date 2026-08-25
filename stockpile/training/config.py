@@ -102,7 +102,7 @@ class DeepCFRConfig:
     until_win_rate_consecutive: int = 2
     seed: int = 42
     device: Literal["auto", "cpu", "cuda", "mps"] = "auto"
-    output_dir: Path = Path("artifacts/deep_cfr/default")
+    output_dir: Path = Path("stockpile/artifacts/deep_cfr/default")
     algorithm: Literal["outcome_sampled_deep_cfr_v1"] = (
         "outcome_sampled_deep_cfr_v1"
     )

@@ -32,7 +32,9 @@ class CurriculumTests(unittest.TestCase):
 
         self.assertEqual(config.batch_size, 32)
         self.assertEqual(config.memory_capacity, 2_000)
-        self.assertEqual(config.output_dir, Path("artifacts/deep_cfr/default"))
+        self.assertEqual(
+            config.output_dir, Path("stockpile/artifacts/deep_cfr/default")
+        )
 
     def test_six_round_default_skips_five_but_manual_schedule_can_include_it(self):
         self.assertEqual(DEFAULT_CURRICULUM, (1, 2, 3, 4, 6))

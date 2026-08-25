@@ -58,7 +58,32 @@ class _ChildProcess:
 
 
 def _repository_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    """Return the stockpile package root (contains ``frontend/`` and ``artifacts/``)."""
+
+    return Path(__file__).resolve().parents[1]
+
+
+def _import_root(package_root: Path | None = None) -> Path:
+    """Return the workspace root that must be on ``sys.path`` for ``import stockpile``."""
+
+    root = _repository_root() if package_root is None else Path(package_root)
+    return root.resolve().parent
+
+
+def _with_stockpile_pythonpath(
+    environment: dict[str, str], *, package_root: Path
+) -> dict[str, str]:
+    """Ensure child Python processes can import the local ``stockpile`` package."""
+
+    updated = dict(environment)
+    import_root = str(_import_root(package_root))
+    existing = updated.get("PYTHONPATH", "").strip()
+    updated["PYTHONPATH"] = (
+        import_root
+        if not existing
+        else f"{import_root}{os.pathsep}{existing}"
+    )
+    return updated
 
 
 def _url_host(host: str) -> str:
@@ -101,7 +126,8 @@ def _check_prerequisites(root: Path) -> str:
         raise RuntimeError(f"Stockpile frontend was not found at {frontend}")
     if not (frontend / "node_modules" / ".bin" / "vite").exists():
         raise RuntimeError(
-            "Frontend dependencies are missing; run npm --prefix frontend install"
+            "Frontend dependencies are missing; "
+            "run npm --prefix stockpile/frontend install"
         )
     return npm
 
@@ -113,7 +139,10 @@ def _process_specs(
     host: str,
     port: int,
 ) -> tuple[tuple[str, list[str], dict[str, str]], ...]:
-    environment = os.environ.copy()
+    environment = _with_stockpile_pythonpath(
+        os.environ.copy(),
+        package_root=root,
+    )
     environment["STOCKPILE_API_ORIGIN"] = _api_origin(host, port)
     return (
         (
@@ -162,8 +191,10 @@ def _spawn_child(
     environment: dict[str, str],
     root: Path,
 ) -> _ChildProcess:
+    # Run from the workspace root so ``import stockpile`` resolves even when the
+    # package directory itself is the configured package root.
     options: dict[str, object] = {
-        "cwd": root,
+        "cwd": _import_root(root),
         "env": environment,
         "stdin": subprocess.DEVNULL,
         "stdout": subprocess.PIPE,

@@ -28,11 +28,11 @@ __pycache__/
 /htmlcov/
 
 # Frontend dependencies, builds, and browser-test output
-/frontend/node_modules/
-/frontend/dist/
-/frontend/coverage/
-/frontend/playwright-report/
-/frontend/test-results/
+/stockpile/frontend/node_modules/
+/stockpile/frontend/dist/
+/stockpile/frontend/coverage/
+/stockpile/frontend/playwright-report/
+/stockpile/frontend/test-results/
 
 # Local environment variables and secrets
 /.env
@@ -44,6 +44,13 @@ __pycache__/
 *.key
 
 # Generated Deep CFR runs and model checkpoints
+/stockpile/artifacts/**
+!/stockpile/artifacts/deep_cfr/
+!/stockpile/artifacts/deep_cfr/lite/
+!/stockpile/artifacts/deep_cfr/lite/run_03/
+!/stockpile/artifacts/deep_cfr/lite/run_03/run.json
+!/stockpile/artifacts/deep_cfr/lite/run_03/round_01/
+!/stockpile/artifacts/deep_cfr/lite/run_03/round_01/policy.pt
 /artifacts/
 /checkpoints/
 /runs/
@@ -51,30 +58,7 @@ __pycache__/
 *.pt
 *.pth
 *.ckpt
+!/stockpile/artifacts/deep_cfr/lite/run_03/round_01/policy.pt
 
-# Write-up figures, notebook, and screenshots (local only)
-/graph.ipynb
-/screenshot/
-/walkthrough_panels/
-/writeup_figures/
-/frontend/scripts/
-/Stockpile_Trainer_Writeup.pdf
-/complexity_comparison.json
-/complexity.pdf
-/complexity.png
-/complexity.svg
-/mechanism.pdf
-/mechanism.png
-/mechanism.svg
-/walkthrough.pdf
-/walkthrough.png
-/walkthrough.svg
-/win_rate.pdf
-/win_rate.png
-/win_rate.svg
-/writeup.pdf
-/writeup.png
-/writeup.svg
-/writeup_*.pdf
-/writeup_*.png
-/writeup_*.svg
+# Write-up notebook, figures, and capture tooling (local only)
+/stockpile/writeup/

@@ -56,6 +56,10 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(
             backend[2]["STOCKPILE_API_ORIGIN"], "http://localhost:8123"
         )
+        self.assertEqual(
+            backend[2]["PYTHONPATH"].split(os.pathsep)[0],
+            str(root.parent),
+        )
         self.assertEqual(frontend[0], "frontend")
         self.assertEqual(
             frontend[1][0:3],
@@ -68,6 +72,7 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(
             frontend[2]["STOCKPILE_API_ORIGIN"], "http://localhost:8123"
         )
+        self.assertEqual(frontend[2]["PYTHONPATH"], backend[2]["PYTHONPATH"])
 
     def test_ipv6_api_origin_is_safe_for_the_vite_proxy(self):
         self.assertEqual(launcher._api_origin("::1", 8000), "http://[::1]:8000")
@@ -104,7 +109,7 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(child.output_tail.text(), "vite startup output")
         popen.assert_called_once_with(
             ["npm", "run", "dev"],
-            cwd=Path("/repository"),
+            cwd=Path("/"),
             env={"A": "B"},
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,

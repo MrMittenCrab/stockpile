@@ -25,8 +25,8 @@ python -m stockpile solve --mode lite --rounds 6
 ```
 
 Normal runs are reserved atomically as
-`artifacts/deep_cfr/lite/run_01`, `run_02`, and so on. Smoke runs are numbered
-independently under `artifacts/deep_cfr/smoke/`. Use `--run INT` to request a
+`stockpile/artifacts/deep_cfr/lite/run_01`, `run_02`, and so on. Smoke runs are numbered
+independently under `stockpile/artifacts/deep_cfr/smoke/`. Use `--run INT` to request a
 specific unused number. `--output-dir PATH` remains available for an explicit
 unmanaged destination and cannot be combined with `--run`.
 
@@ -39,12 +39,12 @@ Resume an interrupted stage from its full checkpoint:
 
 ```console
 python -m stockpile solve --mode lite --rounds 6 \
-  --resume artifacts/deep_cfr/lite/run_03/round_04/full.pt
+  --resume stockpile/artifacts/deep_cfr/lite/run_03/round_04/full.pt
 ```
 
 Reserved or active new-format runs resume in place unless a different
 destination is selected. Completed runs, legacy checkpoints under
-`artifacts/deep_cfr/default/` or the old smoke layout, and unmarked historical
+`stockpile/artifacts/deep_cfr/default/` or the old smoke layout, and unmarked historical
 custom outputs resume into a newly numbered run. The source stays unchanged
 and the fork records its checkpoint hash and source-path provenance. Explicit
 unmanaged forks record the same information in `resume_provenance.json`.
@@ -98,7 +98,7 @@ interruption:
 
 ```console
 python -m stockpile analyze --mode lite --run 3
-python -m stockpile analyze --output-dir artifacts/deep_cfr/lite/run_03
+python -m stockpile analyze --output-dir stockpile/artifacts/deep_cfr/lite/run_03
 ```
 
 This default report reads the last stored evaluation record for each stage
@@ -108,8 +108,8 @@ learning-curve graph from saved checkpoint history:
 ```console
 python -m stockpile analyze --method learning-curve --mode lite --run 3
 python -m stockpile analyze --method learning-curve \
-  --output-dir artifacts/deep_cfr/lite/run_03 \
-  --plot artifacts/deep_cfr/lite/run_03/analysis/learning_curve.png
+  --output-dir stockpile/artifacts/deep_cfr/lite/run_03 \
+  --plot stockpile/artifacts/deep_cfr/lite/run_03/analysis/learning_curve.png
 ```
 
 To analyze sampled regret instead, select the method explicitly:
@@ -117,7 +117,7 @@ To analyze sampled regret instead, select the method explicitly:
 ```console
 python -m stockpile analyze --method regret --mode lite --run 3
 python -m stockpile analyze --method regret \
-  --output-dir artifacts/deep_cfr/lite/run_03 --confidence 0.90
+  --output-dir stockpile/artifacts/deep_cfr/lite/run_03 --confidence 0.90
 ```
 
 Regret analysis writes `analysis/sampled_average_regret.json`, containing the

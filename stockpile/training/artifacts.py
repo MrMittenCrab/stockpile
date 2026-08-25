@@ -1,6 +1,6 @@
 """Torch-free discovery and reservation of Deep CFR artifact runs.
 
-Managed runs live below the project-root ``artifacts/deep_cfr`` directory.
+Managed runs live below the package ``artifacts/deep_cfr`` directory.
 Normal runs use ``<mode>/run_XX`` while smoke runs share the separate
 ``smoke/run_XX`` namespace.  A small versioned ``run.json`` file makes a
 reserved directory discoverable without loading an untrusted PyTorch
@@ -28,7 +28,7 @@ RUN_SCHEMA_VERSION = 1
 RUN_MANIFEST_NAME = "run.json"
 RESUME_PROVENANCE_SCHEMA_VERSION = 1
 RESUME_PROVENANCE_NAME = "resume_provenance.json"
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ARTIFACT_ROOT = PROJECT_ROOT / "artifacts" / "deep_cfr"
 
 RunKind = Literal["normal", "smoke"]

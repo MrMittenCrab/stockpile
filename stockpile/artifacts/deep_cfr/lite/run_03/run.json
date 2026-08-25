@@ -1,0 +1,11 @@
+{
+  "created_at": "2026-08-23T08:52:12.665464Z",
+  "kind": "normal",
+  "mode": "lite",
+  "resume_provenance": null,
+  "run": 3,
+  "run_id": "2a8c6ed5-cc40-4831-b092-1e18f36b9483",
+  "schema_version": 1,
+  "source": "managed",
+  "state": "completed"
+}
