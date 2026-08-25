@@ -111,22 +111,30 @@ class ResolvedConfigurationTests(unittest.TestCase):
                     self.assertEqual(len(configuration.rule_set.enabled_investors), 10)
 
     def test_explicit_switches_override_defaults_without_changing_fixed_layers(self):
-        cases = (
-            ("lite", True, False, False),
-            ("classic", False, True, False),
-            ("deluxe", False, True, True),
+        lite = stockpile.resolve_configuration(
+            "lite",
+            hand=True,
+            fees=True,
+            dividend=True,
+            sell_order=True,
+            impact=True,
         )
-        for mode, value, impact, investor in cases:
+        for name in ("hand", "fees", "dividend", "sell_order", "impact"):
+            self.assertIs(getattr(lite, name), True, name)
+        for name in ("split", "majority", "stock_tracks", "investor"):
+            self.assertIs(getattr(lite, name), False, name)
+
+        for mode, investor in (("classic", False), ("deluxe", True)):
             with self.subTest(mode=mode):
                 configuration = stockpile.resolve_configuration(
                     mode,
-                    hand=value,
-                    fees=value,
-                    dividend=value,
-                    split=value,
-                    majority=value,
-                    stock_tracks=value,
-                    sell_order=value,
+                    hand=False,
+                    fees=False,
+                    dividend=False,
+                    split=False,
+                    majority=False,
+                    stock_tracks=False,
+                    sell_order=False,
                 )
                 for name in (
                     "hand",
@@ -137,9 +145,30 @@ class ResolvedConfigurationTests(unittest.TestCase):
                     "stock_tracks",
                     "sell_order",
                 ):
-                    self.assertIs(getattr(configuration, name), value, name)
-                self.assertIs(configuration.impact, impact)
+                    self.assertIs(getattr(configuration, name), False, name)
+                self.assertIs(configuration.impact, True)
                 self.assertIs(configuration.investor, investor)
+
+    def test_lite_market_impact_is_one_grouped_optional_switch(self):
+        default = stockpile.resolve_configuration("lite")
+        enabled = stockpile.resolve_configuration("lite", impact=True)
+
+        self.assertFalse(default.impact)
+        self.assertNotIn("action", default.rule_set.phase_order)
+        self.assertTrue(enabled.impact)
+        self.assertTrue(enabled.rule_set.market_action_cards)
+        self.assertTrue(enabled.rule_set.stock_boom_cards)
+        self.assertTrue(enabled.rule_set.stock_bust_cards)
+        self.assertIn("action", enabled.rule_set.phase_order)
+        self.assertIs(enabled.parameters.rule_overrides["impact"], True)
+
+    def test_lite_rejects_rules_that_are_not_part_of_lite(self):
+        for name in ("split", "majority", "stock_tracks"):
+            with self.subTest(name=name), self.assertRaisesRegex(
+                ValueError,
+                "Lite does not support",
+            ):
+                stockpile.resolve_configuration("lite", **{name: True})
 
     def test_friendly_switches_map_to_exact_grouped_engine_rules(self):
         configuration = stockpile.resolve_configuration(
@@ -184,7 +213,7 @@ class ResolvedConfigurationTests(unittest.TestCase):
 
     def test_track_dividends_require_both_friendly_layers(self):
         no_dividend = stockpile.resolve_configuration(
-            "lite",
+            "classic",
             dividend=False,
             stock_tracks=True,
         )
@@ -212,8 +241,22 @@ class ResolvedConfigurationTests(unittest.TestCase):
         configuration = stockpile.resolve_configuration("classic")
         with self.assertRaisesRegex(ValueError, "trading_fees"):
             replace(configuration, fees=False)
-        with self.assertRaisesRegex(ValueError, "Market Impact"):
+        with self.assertRaisesRegex(ValueError, "rules profile"):
             replace(configuration, mode=stockpile.ConfigurationMode.LITE)
+
+    def test_invariants_reject_a_capped_lite_rule_set(self):
+        configuration = stockpile.resolve_configuration("lite")
+        capped_rules = replace(
+            configuration.rule_set,
+            standard_price_ceiling=10,
+        )
+        capped_game = replace(
+            configuration.configured_game,
+            rule_set=capped_rules,
+        )
+
+        with self.assertRaisesRegex(ValueError, "standard price ceiling"):
+            replace(configuration, configured_game=capped_game)
 
     def test_invalid_values_are_rejected(self):
         for name in (
@@ -224,6 +267,7 @@ class ResolvedConfigurationTests(unittest.TestCase):
             "majority",
             "stock_tracks",
             "sell_order",
+            "impact",
         ):
             with self.subTest(name=name):
                 with self.assertRaisesRegex(TypeError, name):
@@ -249,7 +293,7 @@ class CompatibilityTests(unittest.TestCase):
             player_count=3,
             round_count=4,
             lite_options=(
-                "majority_bonus",
+                "market_impact",
                 "dividends",
                 "starting_share",
             ),
@@ -259,12 +303,13 @@ class CompatibilityTests(unittest.TestCase):
         self.assertFalse(configuration.fees)
         self.assertTrue(configuration.dividend)
         self.assertFalse(configuration.split)
-        self.assertTrue(configuration.majority)
+        self.assertFalse(configuration.majority)
         self.assertFalse(configuration.stock_tracks)
         self.assertFalse(configuration.sell_order)
+        self.assertTrue(configuration.impact)
         self.assertEqual(
             tuple(option.value for option in configuration.lite_options),
-            ("starting_share", "dividends", "majority_bonus"),
+            ("starting_share", "dividends", "market_impact"),
         )
 
     def test_legacy_deluxe_flag_cannot_disable_fixed_investors(self):
@@ -294,7 +339,7 @@ class CompatibilityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "optional rule"):
             stockpile.create_configuration(
                 "lite",
-                lite_options=("market_impact",),
+                lite_options=("stock_splits",),
             )
 
 

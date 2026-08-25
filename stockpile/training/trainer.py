@@ -10,11 +10,14 @@ Lite game with sealed selling and the compact 18-action head.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import random
 import sys
+import tempfile
 import time
 from typing import Any, TextIO
 
@@ -26,6 +29,18 @@ from .. import complexity_cache
 from .. import stockpile_interface as interface
 from .config import DeepCFRConfig
 from .encoding import ENCODING_SCHEMA_VERSION, InformationInput, TraceSession
+from .learning_curve import (
+    LEARNING_CURVE_PLOT_NAME,
+    LearningCurveStore,
+    bootstrap_seed,
+    checkpoint_evaluation_seed,
+    cumulative_traversals,
+    evaluate_learning_curve_checkpoint,
+    evaluation_checkpoint_iterations,
+    plot_learning_curve,
+    stage_evaluation_seed,
+    stage_traversals,
+)
 from .memory import ReservoirBuffer
 from .models import DeepCFRNetwork, masked_softmax, validate_network_contract
 from .policy import (
@@ -33,6 +48,13 @@ from .policy import (
     POLICY_SCHEMA_VERSION,
     DeepCFRPolicy,
     torch_batch,
+)
+from .regret import (
+    REGRET_SIDECAR_SCHEMA_VERSION,
+    RegretIterationCapture,
+    RegretSidecarArchive,
+    RegretTraversalCapture,
+    TraversalRegretRecord,
 )
 from .sampling import (
     OutcomeSamplingReach,
@@ -45,7 +67,9 @@ from .sampling import (
 )
 
 
-CHECKPOINT_SCHEMA_VERSION = 1
+LEGACY_CHECKPOINT_SCHEMA_VERSION = 1
+CHECKPOINT_SCHEMA_VERSION = 2
+_RESUME_RECOVERY_SCHEMA_VERSION = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +103,7 @@ class _TraversalTelemetry:
     root_value: float
     absolute_regret_targets: tuple[float, ...]
     strategy_log_importance_weights: tuple[float, ...]
+    signed_regret_record: TraversalRegretRecord
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +119,9 @@ class TrainingResult:
     final_checkpoint: Path
     final_policy: Path
     metrics: tuple[dict[str, Any], ...]
+    target_reached: bool = False
+    final_win_rate: float | None = None
+    cumulative_traversals: int = 0
 
 
 def _json_value(value: Any) -> Any:
@@ -223,6 +251,31 @@ class DeepCFRTrainer:
         self.stage_evaluated = False
         self.metrics: list[dict[str, Any]] = []
         self._resume_loaded = False
+        self._loaded_checkpoint_path: Path | None = None
+        self.regret_archive = RegretSidecarArchive(config.output_dir)
+        self.learning_curve = LearningCurveStore(
+            config.output_dir,
+            run_seed=config.seed,
+            evaluation_pairs=config.learning_curve_evaluation_pairs,
+            bootstrap_resamples=config.learning_curve_bootstrap_resamples,
+        )
+        self._learning_curve_schedule = evaluation_checkpoint_iterations(
+            config.iterations_per_stage,
+            checkpoint_count=config.learning_curve_checkpoint_count,
+        )
+        self._until_target_reached = False
+        self._stop_training = False
+        self._last_evaluation_win_rate: float | None = None
+        self._progress_is_tty = False
+        try:
+            self._progress_is_tty = bool(self.output.isatty())
+        except (AttributeError, OSError):
+            self._progress_is_tty = False
+        self._progress_line_open = False
+        self._progress_last_bucket = -1
+        self._progress_completed = 0
+        self._progress_total = 1
+        self._epoch_started_at = time.perf_counter()
 
     @staticmethod
     def _validate_configuration(
@@ -242,6 +295,7 @@ class DeepCFRTrainer:
         enabled = [
             name
             for name in (
+                "impact",
                 "hand",
                 "fees",
                 "dividend",
@@ -259,6 +313,8 @@ class DeepCFRTrainer:
             )
         if configuration.game.num_distinct_actions() != 18:
             raise ValueError("Deep CFR requires a shape-stable 18-action head")
+        if configuration.rule_set.standard_price_ceiling is not None:
+            raise ValueError("Deep CFR requires uncapped Lite price semantics")
 
     def _stage_game(self, round_count: int) -> interface.GameConfig:
         configuration = interface.resolve_configuration(
@@ -342,7 +398,11 @@ class DeepCFRTrainer:
         action, probability = outcomes[-1]
         return action, probability / total
 
-    def _traverse(self, update_player: int) -> _TraversalTelemetry:
+    def _traverse(
+        self,
+        update_player: int,
+        traversal_ordinal: int = 0,
+    ) -> _TraversalTelemetry:
         assert self.stage_configuration is not None
         assert self.strategy_memory is not None
         game = self.stage_configuration.game
@@ -352,6 +412,10 @@ class DeepCFRTrainer:
         nodes: list[_TrajectoryNode] = []
         absolute_regret_targets: list[float] = []
         strategy_log_weights: list[float] = []
+        signed_regret = RegretTraversalCapture(
+            player_id=update_player,
+            traversal_ordinal=traversal_ordinal,
+        )
 
         while not state.is_terminal():
             if state.is_chance_node():
@@ -425,6 +489,11 @@ class DeepCFRTrainer:
             legal_target = target[np.asarray(node.information.legal_mask)]
             if not np.all(np.isfinite(legal_target)):
                 raise FloatingPointError("outcome-sampling regret target is nonfinite")
+            signed_regret.add_target(
+                perfect_recall_id=node.information.perfect_recall_id,
+                legal_mask=node.information.legal_mask,
+                target=target,
+            )
             absolute_regret_targets.extend(
                 float(abs(value)) for value in legal_target
             )
@@ -458,6 +527,7 @@ class DeepCFRTrainer:
             root_value=child_value,
             absolute_regret_targets=tuple(absolute_regret_targets),
             strategy_log_importance_weights=tuple(strategy_log_weights),
+            signed_regret_record=signed_regret.finish(),
         )
 
     def _learn_advantages(self, player: int) -> _OptimizationTelemetry | None:
@@ -601,6 +671,7 @@ class DeepCFRTrainer:
             "rounds": self.stage_configuration.round_count,
             "players": 2,
             "mode": "lite",
+            "market_impact": self.stage_configuration.impact,
             "sell_order": False,
             "action_space_mode": "compact",
             "action_count": self.config.network.action_count,
@@ -614,8 +685,16 @@ class DeepCFRTrainer:
             "semantic_fingerprint": complexity_cache.semantic_fingerprint(
                 self.stage_configuration.configured_game
             ),
+            "price_semantics": {
+                "standard_price_ceiling": (
+                    self.stage_configuration.rule_set.standard_price_ceiling
+                ),
+            },
             "equilibrium_claim": False,
             "resolved_device": str(self.device),
+            "sampled_regret_sidecar_schema_version": (
+                REGRET_SIDECAR_SCHEMA_VERSION
+            ),
         }
 
     def _training_signature(self) -> dict[str, Any]:
@@ -664,10 +743,18 @@ class DeepCFRTrainer:
                 if torch.backends.mps.is_available()
                 else None
             ),
+            "sampled_regret_telemetry": self.regret_archive.checkpoint_state(
+                embed_records=True
+            ),
             "metrics": self.metrics,
         }
 
-    def save_checkpoint(self) -> tuple[Path, Path]:
+    def save_checkpoint(
+        self,
+        *,
+        preserve_intermediate: bool = False,
+        cumulative_traversal_count: int | None = None,
+    ) -> tuple[Path, Path]:
         """Atomically replace the full-resume and compact policy artifacts."""
 
         assert self.strategy_network is not None
@@ -691,30 +778,59 @@ class DeepCFRTrainer:
             policy_temporary,
         )
         policy_temporary.replace(policy_path)
+
+        if preserve_intermediate:
+            if cumulative_traversal_count is None:
+                raise ValueError(
+                    "cumulative_traversal_count is required when preserving "
+                    "intermediate checkpoints"
+                )
+            archive_dir = (
+                self.config.output_dir
+                / "checkpoints"
+                / f"traversals_{int(cumulative_traversal_count):09d}"
+            )
+            archive_dir.mkdir(parents=True, exist_ok=True)
+            archived_full = archive_dir / "full.pt"
+            archived_policy = archive_dir / "policy.pt"
+            if not archived_full.exists():
+                archived_full.write_bytes(full_path.read_bytes())
+            if not archived_policy.exists():
+                archived_policy.write_bytes(policy_path.read_bytes())
+
         return full_path, policy_path
 
     def load_checkpoint(self, path: str | Path) -> None:
         """Restore an exact same-stage run, including memories and RNGs."""
 
-        payload = torch.load(Path(path), map_location=self.device, weights_only=False)
+        checkpoint_path = Path(path).expanduser().resolve(strict=False)
+        payload = torch.load(
+            checkpoint_path,
+            map_location=self.device,
+            weights_only=False,
+        )
         if payload.get("kind") != "stockpile_deep_cfr_training":
             raise ValueError("not a Stockpile Deep CFR training checkpoint")
-        if payload.get("schema_version") != CHECKPOINT_SCHEMA_VERSION:
+        checkpoint_schema = payload.get("schema_version")
+        if checkpoint_schema not in {
+            LEGACY_CHECKPOINT_SCHEMA_VERSION,
+            CHECKPOINT_SCHEMA_VERSION,
+        }:
             raise ValueError("unsupported Deep CFR checkpoint schema")
         if payload.get("training_signature") != self._training_signature():
             raise ValueError("checkpoint training configuration does not match")
         stage_index = int(payload["stage_index"])
         if not 0 <= stage_index < len(self.config.curriculum.rounds):
             raise ValueError("checkpoint curriculum stage is out of range")
-        self._reset_stage(stage_index, transfer_weights=False)
-        assert self.stage_configuration is not None
-        if payload.get("metadata", {}).get("semantic_fingerprint") != (
-            complexity_cache.semantic_fingerprint(
-                self.stage_configuration.configured_game
-            )
-        ):
-            raise ValueError("checkpoint game semantics do not match")
+        stage_configuration = self._stage_game(
+            self.config.curriculum.rounds[stage_index]
+        )
         checkpoint_metadata = payload.get("metadata", {})
+        expected_fingerprint = complexity_cache.semantic_fingerprint(
+            stage_configuration.configured_game
+        )
+        if checkpoint_metadata.get("semantic_fingerprint") != expected_fingerprint:
+            raise ValueError("checkpoint game semantics do not match")
         if checkpoint_metadata.get("encoder_schema_version") != (
             ENCODING_SCHEMA_VERSION
         ):
@@ -727,6 +843,14 @@ class DeepCFRTrainer:
             raise ValueError("checkpoint resolved device does not match")
         if len(payload["advantage_networks"]) != 2:
             raise ValueError("checkpoint must contain two advantage networks")
+        regret_state = payload.get("sampled_regret_telemetry")
+        if checkpoint_schema == CHECKPOINT_SCHEMA_VERSION:
+            if regret_state is None:
+                raise ValueError("checkpoint is missing sampled regret telemetry")
+            self.regret_archive.validate_checkpoint_state(regret_state)
+
+        self._reset_stage(stage_index, transfer_weights=False)
+        assert self.stage_configuration is not None
         for network, state in zip(
             self.advantage_networks,
             payload["advantage_networks"],
@@ -765,31 +889,120 @@ class DeepCFRTrainer:
         mps_state = payload.get("torch_mps_rng_state")
         if mps_state is not None and torch.backends.mps.is_available():
             torch.mps.set_rng_state(mps_state.to("cpu"))
-        self._rewrite_metrics_file()
+        if regret_state is not None:
+            self.regret_archive.restore_checkpoint_state(regret_state)
+        self._rewrite_metrics_file(preserve_existing=True)
         self._resume_loaded = True
+        self._loaded_checkpoint_path = checkpoint_path
 
-    def _write_run_config(self) -> None:
-        self.config.output_dir.mkdir(parents=True, exist_ok=True)
-        path = self.config.output_dir / "config.json"
-        path.write_text(
+    @staticmethod
+    def _write_recovery_file(path: Path, content: bytes) -> None:
+        """Create one immutable recovery file, accepting an identical retry."""
+
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=path.parent,
+        )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            try:
+                os.link(temporary, path)
+            except FileExistsError:
+                if not path.is_file() or path.read_bytes() != content:
+                    raise RuntimeError(
+                        "resume recovery archive conflicts with existing file: "
+                        f"{path}"
+                    )
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def _preserve_resume_reconciliation_input(
+        self,
+        path: Path,
+        replacement: bytes,
+    ) -> Path | None:
+        """Content-address differing bytes before resume reconciliation."""
+
+        if not path.is_file():
+            return None
+        existing = path.read_bytes()
+        if existing == replacement:
+            return None
+
+        digest = hashlib.sha256(existing).hexdigest()
+        recovery_dir = (
+            self.config.output_dir
+            / "recovery"
+            / "resume_reconciliation"
+            / path.name
+            / f"sha256-{digest}"
+        )
+        recovery_dir.mkdir(parents=True, exist_ok=True)
+        recovered_path = recovery_dir / path.name
+        self._write_recovery_file(recovered_path, existing)
+        provenance = {
+            "kind": "stockpile_deep_cfr_resume_recovery",
+            "schema_version": _RESUME_RECOVERY_SCHEMA_VERSION,
+            "reason": "resume_reconciliation",
+            "source_path": path.name,
+            "preserved_sha256": digest,
+            "preserved_byte_count": len(existing),
+        }
+        provenance_bytes = (
+            json.dumps(
+                provenance,
+                indent=2,
+                sort_keys=True,
+                allow_nan=False,
+            )
+            + "\n"
+        ).encode("utf-8")
+        self._write_recovery_file(recovery_dir / "provenance.json", provenance_bytes)
+        return recovered_path
+
+    def _render_run_config(self) -> bytes:
+        return (
             json.dumps(
                 {
+                    "sampled_regret_telemetry": {
+                        "record_schema_version": REGRET_SIDECAR_SCHEMA_VERSION,
+                    },
                     "training": _json_value(asdict(self.config)),
                     "base_game": {
                         "mode": "lite",
                         "players": 2,
                         "rounds": self.base_configuration.round_count,
+                        "market_impact": self.base_configuration.impact,
                         "sell_order": False,
                         "action_space_mode": "compact",
+                        "price_semantics": {
+                            "standard_price_ceiling": (
+                                self.base_configuration.rule_set.standard_price_ceiling
+                            ),
+                        },
                     },
                 },
                 indent=2,
                 sort_keys=True,
                 allow_nan=False,
             )
-            + "\n",
-            encoding="utf-8",
-        )
+            + "\n"
+        ).encode("utf-8")
+
+    def _write_run_config(self, *, preserve_existing: bool = False) -> None:
+        self.config.output_dir.mkdir(parents=True, exist_ok=True)
+        path = self.config.output_dir / "config.json"
+        rendered = self._render_run_config()
+        if preserve_existing:
+            self._preserve_resume_reconciliation_input(path, rendered)
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_bytes(rendered)
+        temporary.replace(path)
 
     def _append_metric(self, metric: dict[str, Any]) -> None:
         self.metrics.append(metric)
@@ -804,12 +1017,8 @@ class DeepCFRTrainer:
                 + "\n"
             )
 
-    def _rewrite_metrics_file(self) -> None:
-        """Make the human-readable log an exact projection of checkpoint state."""
-
-        self.config.output_dir.mkdir(parents=True, exist_ok=True)
-        path = self.config.output_dir / "metrics.jsonl"
-        rendered = "".join(
+    def _render_metrics(self) -> bytes:
+        return "".join(
             json.dumps(
                 _json_value(metric),
                 sort_keys=True,
@@ -817,8 +1026,19 @@ class DeepCFRTrainer:
             )
             + "\n"
             for metric in self.metrics
-        )
-        path.write_text(rendered, encoding="utf-8")
+        ).encode("utf-8")
+
+    def _rewrite_metrics_file(self, *, preserve_existing: bool = False) -> None:
+        """Make the human-readable log an exact projection of checkpoint state."""
+
+        self.config.output_dir.mkdir(parents=True, exist_ok=True)
+        path = self.config.output_dir / "metrics.jsonl"
+        rendered = self._render_metrics()
+        if preserve_existing:
+            self._preserve_resume_reconciliation_input(path, rendered)
+        temporary = path.with_suffix(".jsonl.tmp")
+        temporary.write_bytes(rendered)
+        temporary.replace(path)
 
     def train(
         self,
@@ -834,31 +1054,80 @@ class DeepCFRTrainer:
                 raise ValueError(
                     f"output path is not a directory: {self.config.output_dir}"
                 )
-            if (
-                self.config.output_dir.exists()
-                and any(self.config.output_dir.iterdir())
-                and not overwrite
-            ):
+            existing = (
+                []
+                if not self.config.output_dir.exists()
+                else [
+                    entry
+                    for entry in self.config.output_dir.iterdir()
+                    if entry.name != "run.json"
+                ]
+            )
+            if existing and not overwrite:
                 raise ValueError(
                     f"output directory is not empty: {self.config.output_dir}; "
                     "choose another directory or enable overwrite"
                 )
             self._write_run_config()
             metrics_path.write_text("", encoding="utf-8")
+            self.learning_curve.reset()
             self._reset_stage(0, transfer_weights=False)
         else:
             if overwrite:
                 raise ValueError("overwrite cannot be combined with resume")
-            self.load_checkpoint(resume)
+            checkpoint = Path(resume).expanduser().resolve(strict=False)
+            output_root = self.config.output_dir.expanduser().resolve(strict=False)
+            in_place_resume = checkpoint.is_relative_to(output_root)
+            if self._resume_loaded:
+                if self._loaded_checkpoint_path != checkpoint:
+                    raise ValueError(
+                        "preloaded resume checkpoint does not match requested path"
+                    )
+            else:
+                self.load_checkpoint(checkpoint)
+            self.learning_curve.load()
+            # A preload is single-use.  A later train() call on this object
+            # must restore the requested checkpoint again rather than silently
+            # continuing mutated state from an earlier call.
+            self._resume_loaded = False
+            self._loaded_checkpoint_path = None
             # Do not touch run metadata until the checkpoint has passed all
-            # configuration, semantics, schema, and device validation.
-            self._write_run_config()
+            # configuration, semantics, schema, and device validation.  An
+            # in-place run's config is descriptive metadata, not checkpoint
+            # state; retain its exact bytes (including additive future fields)
+            # instead of regenerating it.  Forks need a destination config.
+            if not in_place_resume or not (
+                self.config.output_dir / "config.json"
+            ).is_file():
+                self._write_run_config(preserve_existing=True)
 
         completed: list[int] = list(
             self.config.curriculum.rounds[: self.stage_index]
         )
         final_checkpoint = final_policy = Path()
+        self._until_target_reached = False
+        self._stop_training = False
+        self._last_evaluation_win_rate = None
+        if self.config.until_win_rate_enabled:
+            required = int(self.config.until_win_rate_consecutive)
+            streak = self.learning_curve.consecutive_win_rate_streak(
+                float(self.config.until_win_rate)
+            )
+            if streak >= required and self.learning_curve.checkpoints:
+                latest = self.learning_curve.checkpoints[-1]
+                self._until_target_reached = True
+                self._stop_training = True
+                self._last_evaluation_win_rate = float(latest["win_rate"])
+                print(
+                    "TARGET REACHED: "
+                    f"{100.0 * float(latest['win_rate']):.1f}% win rate vs random "
+                    f"after {int(latest['cumulative_traversals']):,} traversals",
+                    file=self.output,
+                )
+
         for stage_index in range(self.stage_index, len(self.config.curriculum.rounds)):
+            if self._stop_training:
+                break
             if stage_index != self.stage_index:
                 self._reset_stage(stage_index, transfer_weights=True)
             assert self.stage_configuration is not None
@@ -868,17 +1137,33 @@ class DeepCFRTrainer:
                 f"{round_count} round(s)",
                 file=self.output,
             )
-            while self.stage_iteration < self.config.iterations_per_stage:
+            self._epoch_started_at = time.perf_counter()
+            while self._stage_should_continue(stage_index):
                 started = time.perf_counter()
                 self.stage_iteration += 1
                 self.global_iteration += 1
                 traversals: list[list[_TraversalTelemetry]] = [[], []]
+                regret_iteration = RegretIterationCapture(
+                    stage_index=stage_index,
+                    round_count=round_count,
+                    stage_iteration=self.stage_iteration,
+                    global_iteration=self.global_iteration,
+                    encoder_schema_version=ENCODING_SCHEMA_VERSION,
+                    action_count=self.config.network.action_count,
+                )
                 advantage_optimization: list[_OptimizationTelemetry | None] = []
                 for player in range(2):
-                    for _ in range(self.config.traversals_per_player):
-                        traversals[player].append(self._traverse(player))
+                    for traversal_ordinal in range(
+                        self.config.traversals_per_player
+                    ):
+                        traversal = self._traverse(player, traversal_ordinal)
+                        traversals[player].append(traversal)
+                        regret_iteration.add_traversal(
+                            traversal.signed_regret_record
+                        )
                     advantage_optimization.append(self._learn_advantages(player))
                 strategy_optimization = self._learn_strategy()
+                self.regret_archive.commit(regret_iteration.finish())
                 root_values = [
                     traversal.root_value
                     for player_traversals in traversals
@@ -958,14 +1243,56 @@ class DeepCFRTrainer:
                     ),
                 }
                 self._append_metric(metric)
-                print(
-                    f"  iteration {self.stage_iteration}/"
-                    f"{self.config.iterations_per_stage} "
-                    f"strategy_loss={metric['strategy_loss']!r}",
-                    file=self.output,
+                iteration_budget = self._stage_iteration_budget(stage_index)
+                self._render_training_progress(
+                    self.stage_iteration,
+                    iteration_budget,
                 )
-                if self.stage_iteration % self.config.checkpoint_every == 0:
-                    final_checkpoint, final_policy = self.save_checkpoint()
+                due_until_eval = self._until_win_rate_evaluation_due()
+                if (
+                    self.stage_iteration % self.config.checkpoint_every == 0
+                    or due_until_eval
+                ):
+                    traversal_count = self._cumulative_traversal_count(stage_index)
+                    final_checkpoint, final_policy = self.save_checkpoint(
+                        preserve_intermediate=due_until_eval,
+                        cumulative_traversal_count=(
+                            traversal_count if due_until_eval else None
+                        ),
+                    )
+                self._evaluate_learning_curve_if_due(stage_index, round_count)
+                if self._stop_training:
+                    break
+
+            self._finish_training_progress()
+
+            if self.config.until_win_rate_enabled:
+                if (
+                    not self._until_target_reached
+                    and self.stage_iteration > 0
+                    and not self.learning_curve.contains(
+                        stage_index, self.stage_iteration
+                    )
+                ):
+                    traversal_count = self._cumulative_traversal_count(stage_index)
+                    final_checkpoint, final_policy = self.save_checkpoint(
+                        preserve_intermediate=True,
+                        cumulative_traversal_count=traversal_count,
+                    )
+                    self._evaluate_learning_curve_if_due(
+                        stage_index,
+                        round_count,
+                        force=True,
+                    )
+                final_checkpoint, final_policy = self.save_checkpoint()
+                if round_count not in completed:
+                    completed.append(round_count)
+                if (
+                    self._stop_training
+                    or stage_index == len(self.config.curriculum.rounds) - 1
+                ):
+                    break
+                continue
 
             if not self.stage_evaluated:
                 assert self.strategy_network is not None
@@ -993,19 +1320,324 @@ class DeepCFRTrainer:
             final_checkpoint, final_policy = self.save_checkpoint()
             completed.append(round_count)
 
+        plot_path = self._write_learning_curve_plot()
+        if plot_path is not None:
+            print(f"Learning curve: {plot_path}", file=self.output)
+
+        cumulative = (
+            self.global_iteration * self.config.traversals_per_iteration()
+            if self.global_iteration > 0
+            else 0
+        )
+        if (
+            self.config.until_win_rate_enabled
+            and not self._until_target_reached
+            and self._last_evaluation_win_rate is not None
+        ):
+            print(
+                "MAX ITERATIONS REACHED: "
+                f"{100.0 * self._last_evaluation_win_rate:.1f}% win rate vs random "
+                f"after {self.global_iteration:,} iterations "
+                f"({cumulative:,} traversals; "
+                f"target {100.0 * float(self.config.until_win_rate):.1f}%)",
+                file=self.output,
+            )
+
         return TrainingResult(
             output_dir=self.config.output_dir,
             completed_rounds=tuple(completed),
             final_checkpoint=final_checkpoint,
             final_policy=final_policy,
             metrics=tuple(self.metrics),
+            target_reached=self._until_target_reached,
+            final_win_rate=self._last_evaluation_win_rate,
+            cumulative_traversals=cumulative,
         )
+
+    def _evaluate_learning_curve_if_due(
+        self,
+        stage_index: int,
+        round_count: int,
+        *,
+        force: bool = False,
+    ) -> None:
+        """Pause briefly for a frozen learning-curve evaluation when scheduled."""
+
+        if not force and not self._learning_curve_evaluation_due(stage_index):
+            return
+        if self.learning_curve.contains(stage_index, self.stage_iteration):
+            return
+        assert self.stage_configuration is not None
+        assert self.strategy_network is not None
+
+        # Wall time for the training block since the last evaluation (or stage start).
+        epoch_seconds = time.perf_counter() - self._epoch_started_at
+
+        trainer_rng_state = self.rng.getstate()
+        python_rng_state = random.getstate()
+        numpy_rng_state = np.random.get_state()
+        torch_rng_state = torch.get_rng_state()
+        cuda_rng_states = (
+            torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+        )
+        mps_rng_state = (
+            torch.mps.get_rng_state() if torch.backends.mps.is_available() else None
+        )
+        network_modes = [
+            network.training
+            for network in (*self.advantage_networks, self.strategy_network)
+        ]
+
+        cumulative = self._cumulative_traversal_count(stage_index)
+        if self.config.until_win_rate_enabled:
+            evaluation_seed = checkpoint_evaluation_seed(
+                self.config.seed,
+                stage_index=stage_index,
+                stage_iteration=self.stage_iteration,
+            )
+        else:
+            evaluation_seed = stage_evaluation_seed(self.config.seed, stage_index)
+
+        try:
+            for network in (*self.advantage_networks, self.strategy_network):
+                network.eval()
+            record = evaluate_learning_curve_checkpoint(
+                self.stage_configuration.configured_game,
+                DeepCFRPolicy(
+                    self.strategy_network,
+                    device=self.device,
+                    metadata=self._metadata(),
+                ),
+                pairs=self.config.learning_curve_evaluation_pairs,
+                evaluation_seed=evaluation_seed,
+                bootstrap_resamples=self.config.learning_curve_bootstrap_resamples,
+                bootstrap_rng_seed=bootstrap_seed(
+                    self.config.seed,
+                    stage_index=stage_index,
+                    stage_iteration=self.stage_iteration,
+                ),
+                round_horizon=round_count,
+                stage_index=stage_index,
+                stage_iteration=self.stage_iteration,
+                global_iteration=self.global_iteration,
+                stage_traversal_count=stage_traversals(
+                    self.stage_iteration,
+                    self.config.traversals_per_player,
+                ),
+                cumulative_traversal_count=cumulative,
+            )
+        finally:
+            for network, was_training in zip(
+                (*self.advantage_networks, self.strategy_network),
+                network_modes,
+                strict=True,
+            ):
+                network.train(was_training)
+            self.rng.setstate(trainer_rng_state)
+            random.setstate(python_rng_state)
+            np.random.set_state(numpy_rng_state)
+            torch.set_rng_state(torch_rng_state)
+            if cuda_rng_states is not None and torch.cuda.is_available():
+                torch.cuda.set_rng_state_all(cuda_rng_states)
+            if mps_rng_state is not None and torch.backends.mps.is_available():
+                torch.mps.set_rng_state(mps_rng_state)
+
+        wrote = self.learning_curve.append(record)
+        if wrote:
+            self._last_evaluation_win_rate = float(record["win_rate"])
+            self._emit_progress_log(
+                "  evaluation "
+                f"iteration={record['global_iteration']} "
+                f"epoch={self._format_duration(epoch_seconds)} "
+                f"traversals={record['cumulative_traversals']:,} "
+                f"games={record['evaluation_games']} "
+                f"wins={record['wins']} losses={record['losses']} "
+                f"ties={record['ties']} "
+                f"win_rate={100.0 * float(record['win_rate']):.1f}% "
+                f"mean_utility={record['mean_utility']:.4f} "
+                f"ci95=[{100.0 * float(record['win_rate_ci95_lower']):.1f}%, "
+                f"{100.0 * float(record['win_rate_ci95_upper']):.1f}%]",
+                restore_progress=True,
+            )
+            if self.config.until_win_rate_enabled:
+                self._append_metric(
+                    {
+                        "kind": "learning_curve_evaluation",
+                        **record,
+                    }
+                )
+                self._maybe_stop_for_until_win_rate(record)
+        self._epoch_started_at = time.perf_counter()
+
+    def _learning_curve_evaluation_due(self, stage_index: int) -> bool:
+        if self.config.until_win_rate_enabled:
+            return self._until_win_rate_evaluation_due()
+        return self.stage_iteration in self._learning_curve_schedule
+
+    def _until_win_rate_evaluation_due(self) -> bool:
+        if not self.config.until_win_rate_enabled:
+            return False
+        every = self.config.eval_every_iterations
+        assert every is not None
+        return self.global_iteration > 0 and self.global_iteration % every == 0
+
+    def _stage_iteration_budget(self, stage_index: int) -> int:
+        if not self.config.until_win_rate_enabled:
+            return int(self.config.iterations_per_stage)
+        if stage_index < len(self.config.curriculum.rounds) - 1:
+            return int(self.config.iterations_per_stage)
+        assert self.config.max_iterations is not None
+        remaining = max(0, int(self.config.max_iterations) - self.global_iteration)
+        return int(self.stage_iteration + remaining)
+
+    def _render_training_progress(
+        self,
+        completed: int,
+        total: int | str,
+    ) -> None:
+        """Overwrite a single progress line while training between evaluations."""
+
+        try:
+            total_count = max(1, int(total))
+        except (TypeError, ValueError):
+            total_count = max(1, int(completed))
+        completed_count = max(0, min(int(completed), total_count))
+        self._progress_completed = completed_count
+        self._progress_total = total_count
+        fraction = completed_count / total_count
+        width = 28
+        filled = int(round(fraction * width))
+        bar = "#" * filled + "-" * (width - filled)
+        line = (
+            f"  training [{bar}] "
+            f"{100.0 * fraction:5.1f}%  {completed_count}/{total_count}"
+        )
+        if self._progress_is_tty:
+            # Keep the bar on one bottom line; clear any leftover width.
+            self.output.write("\r" + line + "\033[K")
+            self.output.flush()
+            self._progress_line_open = True
+            return
+        # Non-TTY logs stay sparse: mark every 10% boundary and the finish.
+        previous = getattr(self, "_progress_last_bucket", -1)
+        bucket = int(fraction * 10)
+        if completed_count >= total_count or bucket != previous:
+            print(line, file=self.output)
+            self._progress_last_bucket = bucket
+            self._progress_line_open = False
+
+    @staticmethod
+    def _format_duration(seconds: float) -> str:
+        """Format a wall-clock duration as compact seconds/minutes/hours."""
+
+        total = max(0.0, float(seconds))
+        if total < 60.0:
+            if total < 10.0:
+                return f"{total:.1f}s"
+            return f"{total:.0f}s"
+        whole = int(round(total))
+        minutes, secs = divmod(whole, 60)
+        if minutes < 60:
+            return f"{minutes}m {secs:02d}s" if secs else f"{minutes}m"
+        hours, minutes = divmod(minutes, 60)
+        if minutes:
+            return f"{hours}h {minutes}m"
+        return f"{hours}h"
+
+    def _clear_training_progress_line(self) -> None:
+        """Erase an in-place progress line without committing it to the log."""
+
+        if self._progress_is_tty and self._progress_line_open:
+            self.output.write("\r\033[K")
+            self.output.flush()
+            self._progress_line_open = False
+
+    def _emit_progress_log(
+        self,
+        message: str,
+        *,
+        restore_progress: bool,
+    ) -> None:
+        """Print a permanent line; optionally redraw the progress bar below it."""
+
+        if self._progress_is_tty and self._progress_line_open:
+            self._clear_training_progress_line()
+        elif self._progress_line_open:
+            self._finish_training_progress()
+        print(message, file=self.output)
+        if restore_progress and self._progress_is_tty:
+            self._render_training_progress(
+                self._progress_completed,
+                self._progress_total,
+            )
+
+    def _finish_training_progress(self) -> None:
+        if self._progress_line_open:
+            self.output.write("\n")
+            self.output.flush()
+            self._progress_line_open = False
+        self._progress_last_bucket = -1
+
+    def _stage_should_continue(self, stage_index: int) -> bool:
+        if self._stop_training:
+            return False
+        if not self.config.until_win_rate_enabled:
+            return self.stage_iteration < self.config.iterations_per_stage
+        if stage_index < len(self.config.curriculum.rounds) - 1:
+            return self.stage_iteration < self.config.iterations_per_stage
+        assert self.config.max_iterations is not None
+        return (self.global_iteration + 1) <= int(self.config.max_iterations)
+
+    def _cumulative_traversal_count(self, stage_index: int) -> int:
+        if self.config.until_win_rate_enabled:
+            return self.global_iteration * self.config.traversals_per_iteration()
+        return cumulative_traversals(
+            stage_index=stage_index,
+            stage_iteration=self.stage_iteration,
+            iterations_per_stage=self.config.iterations_per_stage,
+            traversals_per_player=self.config.traversals_per_player,
+        )
+
+    def _maybe_stop_for_until_win_rate(self, record: dict[str, Any]) -> None:
+        assert self.config.until_win_rate is not None
+        assert self.config.max_iterations is not None
+        win_rate = float(record["win_rate"])
+        traversals = int(record["cumulative_traversals"])
+        iteration = int(record["global_iteration"])
+        required = int(self.config.until_win_rate_consecutive)
+        streak = self.learning_curve.consecutive_win_rate_streak(
+            float(self.config.until_win_rate)
+        )
+        if streak >= required:
+            self._until_target_reached = True
+            self._stop_training = True
+            self._emit_progress_log(
+                "TARGET REACHED: "
+                f"{100.0 * win_rate:.1f}% win rate vs random "
+                f"after {iteration:,} iterations ({traversals:,} traversals)",
+                restore_progress=False,
+            )
+            return
+        if iteration >= int(self.config.max_iterations):
+            self._stop_training = True
+
+    def _write_learning_curve_plot(self) -> Path | None:
+        if not self.learning_curve.checkpoints:
+            return None
+        destination = (
+            self.config.output_dir / "analysis" / LEARNING_CURVE_PLOT_NAME
+        )
+        try:
+            return plot_learning_curve(self.learning_curve.json_path, destination)
+        except ImportError:
+            return None
 
 
 __all__ = [
     "AdvantageSample",
     "CHECKPOINT_SCHEMA_VERSION",
     "DeepCFRTrainer",
+    "LEGACY_CHECKPOINT_SCHEMA_VERSION",
     "StrategySample",
     "TrainingResult",
 ]

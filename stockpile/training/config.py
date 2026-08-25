@@ -92,9 +92,17 @@ class DeepCFRConfig:
     gradient_clip: float = 5.0
     checkpoint_every: int = 10
     evaluation_pairs: int = 100
+    learning_curve_pairs: int = 500
+    learning_curve_bootstrap_resamples: int = 10_000
+    learning_curve_checkpoint_count: int = 10
+    until_win_rate: float | None = None
+    eval_every_iterations: int | None = None
+    eval_games: int | None = None
+    max_iterations: int | None = None
+    until_win_rate_consecutive: int = 2
     seed: int = 42
     device: Literal["auto", "cpu", "cuda", "mps"] = "auto"
-    output_dir: Path = Path("artifacts/deep_cfr/default")
+    output_dir: Path = Path("stockpile/artifacts/deep_cfr/default")
     algorithm: Literal["outcome_sampled_deep_cfr_v1"] = (
         "outcome_sampled_deep_cfr_v1"
     )
@@ -109,6 +117,12 @@ class DeepCFRConfig:
             "memory_capacity": self.memory_capacity,
             "checkpoint_every": self.checkpoint_every,
             "evaluation_pairs": self.evaluation_pairs,
+            "learning_curve_pairs": self.learning_curve_pairs,
+            "learning_curve_bootstrap_resamples": (
+                self.learning_curve_bootstrap_resamples
+            ),
+            "learning_curve_checkpoint_count": self.learning_curve_checkpoint_count,
+            "until_win_rate_consecutive": self.until_win_rate_consecutive,
         }
         for name, value in positive_integers.items():
             if isinstance(value, bool) or value < 1:
@@ -122,6 +136,82 @@ class DeepCFRConfig:
         if self.batch_size > self.memory_capacity:
             raise ValueError("batch_size cannot exceed memory_capacity")
         object.__setattr__(self, "output_dir", Path(self.output_dir))
+        self._validate_until_win_rate_options()
+
+    def traversals_per_iteration(self) -> int:
+        """Return sampled trajectories completed by one full training iteration."""
+
+        return int(self.traversals_per_player) * 2
+
+    def _validate_until_win_rate_options(self) -> None:
+        until = self.until_win_rate
+        eval_every = self.eval_every_iterations
+        eval_games = self.eval_games
+        max_iterations = self.max_iterations
+        any_until_option = any(
+            value is not None
+            for value in (until, eval_every, eval_games, max_iterations)
+        )
+        if until is None:
+            if any_until_option:
+                raise ValueError(
+                    "eval-every, eval-games, and max-iterations require --until-win-rate"
+                )
+            return
+        if isinstance(until, bool) or not isinstance(until, (int, float)):
+            raise ValueError("until_win_rate must be a number")
+        until = float(until)
+        if not 0.0 < until <= 1.0:
+            raise ValueError("until_win_rate must be in (0, 1]")
+        object.__setattr__(self, "until_win_rate", until)
+
+        if eval_every is None:
+            eval_every = 100
+        if (
+            isinstance(eval_every, bool)
+            or not isinstance(eval_every, int)
+            or eval_every < 1
+        ):
+            raise ValueError("eval_every_iterations must be a positive integer")
+        object.__setattr__(self, "eval_every_iterations", int(eval_every))
+
+        if eval_games is None:
+            eval_games = 2_000
+        if (
+            isinstance(eval_games, bool)
+            or not isinstance(eval_games, int)
+            or eval_games < 2
+            or eval_games % 2 != 0
+        ):
+            raise ValueError("eval_games must be a positive even integer")
+        object.__setattr__(self, "eval_games", int(eval_games))
+
+        if max_iterations is None:
+            max_iterations = 10_000
+        if (
+            isinstance(max_iterations, bool)
+            or not isinstance(max_iterations, int)
+            or max_iterations < 1
+        ):
+            raise ValueError("max_iterations must be a positive integer")
+        if max_iterations < int(eval_every):
+            raise ValueError(
+                "max_iterations must be at least eval_every_iterations "
+                f"({int(eval_every)})"
+            )
+        object.__setattr__(self, "max_iterations", int(max_iterations))
+
+    @property
+    def until_win_rate_enabled(self) -> bool:
+        return self.until_win_rate is not None
+
+    @property
+    def learning_curve_evaluation_pairs(self) -> int:
+        """Pairs used for in-training learning-curve / until-win-rate evaluation."""
+
+        if self.eval_games is not None:
+            return int(self.eval_games) // 2
+        return int(self.learning_curve_pairs)
 
     @classmethod
     def smoke(
@@ -142,6 +232,9 @@ class DeepCFRConfig:
             memory_capacity=512,
             checkpoint_every=1,
             evaluation_pairs=8,
+            learning_curve_pairs=2,
+            learning_curve_bootstrap_resamples=32,
+            learning_curve_checkpoint_count=10,
             seed=seed,
             device="cpu",
             output_dir=Path(output_dir),

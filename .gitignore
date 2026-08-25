@@ -27,6 +27,13 @@ __pycache__/
 /coverage.xml
 /htmlcov/
 
+# Frontend dependencies, builds, and browser-test output
+/stockpile/frontend/node_modules/
+/stockpile/frontend/dist/
+/stockpile/frontend/coverage/
+/stockpile/frontend/playwright-report/
+/stockpile/frontend/test-results/
+
 # Local environment variables and secrets
 /.env
 /.env.*
@@ -37,6 +44,13 @@ __pycache__/
 *.key
 
 # Generated Deep CFR runs and model checkpoints
+/stockpile/artifacts/**
+!/stockpile/artifacts/deep_cfr/
+!/stockpile/artifacts/deep_cfr/lite/
+!/stockpile/artifacts/deep_cfr/lite/run_03/
+!/stockpile/artifacts/deep_cfr/lite/run_03/run.json
+!/stockpile/artifacts/deep_cfr/lite/run_03/round_01/
+!/stockpile/artifacts/deep_cfr/lite/run_03/round_01/policy.pt
 /artifacts/
 /checkpoints/
 /runs/
@@ -44,3 +58,7 @@ __pycache__/
 *.pt
 *.pth
 *.ckpt
+!/stockpile/artifacts/deep_cfr/lite/run_03/round_01/policy.pt
+
+# Write-up notebook, figures, and capture tooling (local only)
+/stockpile/writeup/

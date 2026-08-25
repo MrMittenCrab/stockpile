@@ -267,10 +267,23 @@ def semantic_rule_payload(
     payload: dict[str, Any] = {
         "semantic_payload_version": COMPLEXITY_SEMANTICS_VERSION,
     }
-    excluded = {"profile", "action_space_mode", "action_codec"}
+    excluded = {
+        "profile",
+        "action_space_mode",
+        "action_codec",
+        "standard_price_ceiling",
+    }
     for item in fields(rule_set):
         if item.name not in excluded:
             payload[item.name] = _canonical_value(getattr(rule_set, item.name))
+    # A ceiling of 10 is the historical standard-track behavior and is omitted
+    # so unchanged Classic and Deluxe trees retain their existing identity.
+    # Lite's explicit ``None`` is included to distinguish uncapped prices from
+    # legacy capped Lite artifacts, whose payload contained no ceiling field.
+    if rule_set.standard_price_ceiling != 10:
+        payload["standard_price_ceiling"] = _canonical_value(
+            rule_set.standard_price_ceiling
+        )
     payload["action_codec_ranges"] = [
         {
             "namespace": namespace,

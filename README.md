@@ -1,12 +1,10 @@
 # Stockpile
 
-This repository contains a configurable Stockpile rules engine with a native
-OpenSpiel interface, information-set complexity analysis, and an optional Deep
-CFR trainer. It supports the `lite`, `classic`, and `deluxe` rules profiles.
+Configurable Stockpile rules engine with an OpenSpiel interface, information-set
+complexity analysis, local browser play against a Deep CFR computer, and an
+optional Deep CFR trainer. Rules profiles: `lite`, `classic`, and `deluxe`.
 
 ## Setup
-
-Create and activate a virtual environment, then install the core dependencies:
 
 ```console
 python -m venv .venv
@@ -14,62 +12,104 @@ source .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
 
-Inspect the CLI or a resolved rules profile:
-
 ```console
 python -m stockpile --help
 python -m stockpile rules --mode lite
 python -m stockpile complexity --mode lite
 ```
 
-Lite defaults to two players and six rounds. Market Impact, Investors, starting
-shares, fees, dividends, splits, majority bonuses, advanced stock tracks, and
-sell order are off. Selling is therefore sealed: players commit without seeing
-earlier commitments, and all sales are revealed and settled together. Each
-optional Lite rule can still be enabled explicitly through the CLI.
+Lite defaults to two players and six rounds. Market Impact, starting shares,
+fees, dividends, and sell order are optional and off by default, so selling is
+sealed (commitments are revealed and settled together). Enable Action Cards with
+`--impact on`. Stock splits, majority bonuses, and advanced price tracks are not
+Lite rules.
 
-## Deep CFR
+## Play
 
-Install the optional training dependencies:
+Local one-round Stockpile Lite between `YOU` and `COMPUTER`. The computer loads
+the bundled Deep CFR average policy at
+`stockpile/artifacts/deep_cfr/lite/run_03/round_01/policy.pt` (the latest
+published Lite run). Override with `--policy`, `--run`, or `--policy random`.
+Lite+ options that leave the trained Lite rules fall back to uniform legal
+actions. Games are in-memory only.
+
+```console
+.venv/bin/python -m pip install -r requirements-web.txt
+npm --prefix stockpile/frontend install
+npm --prefix stockpile/frontend exec -- playwright install chromium
+python -m stockpile play
+```
+
+Open <http://127.0.0.1:5173>, choose `LITE` or `LITE+`, then `PLAY`. `LITE+`
+exposes Dividend, Fees, and Sell Order. The client submits opaque actions and
+server-authored plans only; it never sees the computer's private portfolio.
+
+Press `Ctrl+C` to stop. No accounts, multiplayer, WebSockets, or persistent
+storage.
+
+## Solve
+
+Outcome-sampled Deep CFR for the canonical two-player compact Lite game (sealed
+selling, Market Impact off).
 
 ```console
 python -m pip install -r requirements-training.txt
-```
-
-Run the small one-round smoke preset:
-
-```console
 python -m stockpile solve --mode lite --rounds 1 --smoke
-```
-
-Start the default six-round curriculum:
-
-```console
 python -m stockpile solve --mode lite --rounds 6
 ```
 
-The solver targets the canonical two-player compact Lite game with sealed
-selling. It uses outcome-sampled Deep CFR and a strict visible-history encoder;
-the default curriculum is `1,2,3,4,6`. Its paired policy evaluation is training
-telemetry, not an exact exploitability or equilibrium claim. See
-[`stockpile/training/README.md`](stockpile/training/README.md) for checkpoints,
-resume behavior, memory defaults, and additional training options.
+Runs land under `stockpile/artifacts/deep_cfr/lite/run_XX` (smoke under
+`stockpile/artifacts/deep_cfr/smoke/`). Use `--run INT` or `--output-dir PATH`.
+
+Default curriculum: `1,2,3,4,6`. Train until a win-rate target vs random:
+
+```console
+python -m stockpile solve --mode lite --rounds 1 --until-win-rate 0.70
+```
+
+With `--until-win-rate`, evaluations run every `--eval-every` iterations
+(default 100), write learning-curve history, and stop after two consecutive hits
+or `--max-iterations` (default 10,000).
+
+See [`stockpile/training/README.md`](stockpile/training/README.md) for
+checkpoints, resume, memories, and telemetry.
+
+## Analyze
+
+Report stored evaluation, learning-curve history, or sampled regret for one run:
+
+```console
+python -m stockpile analyze --mode lite --run 1
+python -m stockpile analyze --output-dir stockpile/artifacts/deep_cfr/lite/run_01
+python -m stockpile analyze --method learning-curve --mode lite --run 1
+python -m stockpile analyze --method regret --mode lite --run 1 --confidence 0.90
+```
+
+Default `--method evaluation` reads the last paired evaluation from
+`metrics.jsonl` (no new games). Learning-curve mode regenerates the win-rate
+plot from saved checkpoints. Regret mode writes
+`analysis/sampled_average_regret.json`; it is sampled average regret, not
+exploitability or NashConv.
 
 ## Tests
 
 ```console
 python -m unittest discover -s stockpile/tests -v
+npm --prefix stockpile/frontend run typecheck
+npm --prefix stockpile/frontend test
+npm --prefix stockpile/frontend run build
+npm --prefix stockpile/frontend run e2e
 ```
 
 ## Layout
 
-- `stockpile/stockpile_platform.py` — rules, state transitions, scoring, and
-  OpenSpiel integration.
-- `stockpile/stockpile_interface.py` — UI-neutral configuration and analysis
-  facade.
-- `stockpile/complexity_cache.py` — semantic fingerprints and remembered
-  information-set complexity results.
-- `stockpile/training/` — Deep CFR encoding, sampling, models, trainer, policy,
-  and evaluation.
-- `stockpile/tests/` — engine, interface, CLI, complexity, and training tests.
-- `stockpile/docs/` — bundled Stockpile rules and reference documents.
+- `stockpile/stockpile_platform.py` — rules, transitions, OpenSpiel game
+- `stockpile/stockpile_interface.py` — configuration and analysis facade
+- `stockpile/complexity_cache.py` — remembered infoset-complexity results
+- `stockpile/training/` — Deep CFR trainer, encoder, policy, evaluation
+- `stockpile/web/` — local FastAPI sessions and privacy-safe views
+- `stockpile/frontend/` — Vite/React `YOU` vs `COMPUTER` client
+- `stockpile/artifacts/deep_cfr/lite/run_03/` — bundled play policy (`policy.pt`)
+- `stockpile/writeup/` — local write-up notebook and figures (gitignored)
+- `stockpile/tests/` — engine, CLI, web, and training tests
+- `stockpile/docs/` — bundled Stockpile rules references

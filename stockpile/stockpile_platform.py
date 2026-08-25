@@ -4,11 +4,10 @@ Money is represented in thousands of dollars.  The module deliberately keeps
 the mutable :class:`GameState` compact; Pydantic is used only at configuration
 and validation boundaries.
 
-The ``lite`` rules profile keeps the complete six-company game while omitting
-the Market Impact phase and enabling a small set of rules only on request.
-``classic`` implements the standard base game without Investors. ``deluxe``
-adds the complete ten-card Investor deck. Advanced company tracks and the
-other optional mechanics remain independently configurable in every profile.
+The ``lite`` rules profile keeps the complete six-company game and can add the
+Market Impact phase on request, while omitting split, majority-shareholder,
+and advanced-track mechanics. ``classic`` implements the standard base game
+without Investors. ``deluxe`` adds the complete ten-card Investor deck.
 """
 
 from __future__ import annotations
@@ -134,8 +133,7 @@ class LiteOptionalRule(str, Enum):
     STARTING_SHARE = "starting_share"
     TRADING_FEES = "trading_fees"
     DIVIDENDS = "dividends"
-    STOCK_SPLITS = "stock_splits"
-    MAJORITY_BONUS = "majority_bonus"
+    MARKET_IMPACT = "market_impact"
 
 
 PROFILE_ALIASES = {
@@ -397,6 +395,89 @@ class AutomaticEventRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class PresentationEventRecord:
+    """Public, display-only event excluded from game information semantics."""
+
+    presentation_sequence: int
+    round: int
+    event_type: str
+    cause: str
+    company_id: int
+    company_name: str
+    prior_price: int
+    requested_delta: int | None
+    actual_delta: int
+    resulting_price: int
+    forecast: int | str | None = None
+    effect: str | None = None
+    actor_id: int | None = None
+    description: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class BidMarkerPresentation:
+    """One public bidding position currently occupying a Stockpile."""
+
+    stockpile_id: int
+    player_id: int
+    marker_index: int
+    bid_value: int
+    status: Literal["leading", "locked"]
+
+
+@dataclass(frozen=True, slots=True)
+class PresentationState:
+    """Viewer-safe staged context that is not part of an information state."""
+
+    phase: str
+    stage: str
+    current_actor: int | None
+    demand_token: tuple[int, int] | None
+    demand_pile: int | None
+    supply_choice: int | None
+    supply_up_pile: int | None
+    selected_direction: str | None
+    selling_company: int | None
+    stockpile_markers: tuple[BidMarkerPresentation, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SalePreview:
+    """Authoritative, non-mutating proceeds and holdings preview for a sale."""
+
+    action_id: int
+    action_type: str
+    label: str
+    company_id: int
+    company_name: str
+    quantity_sold: int
+    unit_price: int
+    gross_value: int
+    resulting_regular: int
+    resulting_split: int
+    resulting_represented: int
+
+
+@dataclass(frozen=True, slots=True)
+class TerminalCompanyLiquidation:
+    company_id: int
+    company_name: str
+    represented_shares: int
+    unit_price: int
+    value: int
+
+
+@dataclass(frozen=True, slots=True)
+class TerminalPlayerLiquidation:
+    player_id: int
+    companies: tuple[TerminalCompanyLiquidation, ...]
+    liquidation_value: int
+    final_cash: int
+    rank: int
+    winner: bool
+
+
+@dataclass(frozen=True, slots=True)
 class GameResult:
     final_cash_by_player: Mapping[int, int]
     majority_shareholders: Mapping[int, tuple[int, ...]]
@@ -471,6 +552,7 @@ class RuleSet:
     starting_shares_per_player: int
     starting_cash: int
     starting_price: int
+    standard_price_ceiling: int | None
     bid_values: tuple[int, ...]
     forecast_values: tuple[int | str, ...]
     stockpile_count: int
@@ -527,6 +609,9 @@ def _profile_defaults(profile: str, players: int) -> dict[str, Any]:
         "starting_shares_per_player": 1,
         "starting_cash": 30 if players == 2 else 20,
         "starting_price": 5,
+        "standard_price_ceiling": (
+            None if profile == RulesProfile.LITE.value else 10
+        ),
         "bid_values": list(CLASSIC_BIDS),
         "forecast_values": list(CLASSIC_FORECASTS),
         "two_player_topology": "official" if players == 2 else "standard",
@@ -673,6 +758,11 @@ def _normalise_rule_set(parameters: GameParameters) -> RuleSet:
         "fees": ("trading_fees",),
         "dividend": ("forecast_dividends", "dividend_reveal_choice"),
         "dividends": ("forecast_dividends", "dividend_reveal_choice"),
+        "impact": (
+            "market_action_cards",
+            "stock_boom_cards",
+            "stock_bust_cards",
+        ),
         "split": ("stock_splits", "repeat_split_bonus"),
         "majority": ("majority_bonus",),
         "stock_tracks": ("advanced_price_tracks",),
@@ -691,6 +781,11 @@ def _normalise_rule_set(parameters: GameParameters) -> RuleSet:
                 if target == "starting_shares_per_player"
                 else enabled_value,
             )
+    if (
+        profile != RulesProfile.LITE.value
+        and "impact" in parameters.rule_overrides
+    ):
+        raise ValueError("impact is configurable only in Lite")
     if "stock_splits" in overrides and "repeat_split_bonus" not in overrides:
         overrides["repeat_split_bonus"] = overrides["stock_splits"]
 
@@ -698,6 +793,21 @@ def _normalise_rule_set(parameters: GameParameters) -> RuleSet:
     # path is not presented by the terminal UI, but it is necessary for old
     # serialized custom games and for programmer-level experiments.
     values.update(overrides)
+    # OpenSpiel scalar parameters and legacy serialized overrides may carry
+    # booleans as strings. Canonicalize every feature switch before any
+    # derived-rule or profile validation so ``"false"`` cannot become truthy
+    # through a later generic ``bool(...)`` conversion.
+    for key in OPTIONAL_FEATURE_KEYS:
+        values[key] = _decode_bool_scalar(values[key], name=key)
+    expected_price_ceiling = None if profile == RulesProfile.LITE.value else 10
+    if (
+        "standard_price_ceiling" in overrides
+        and values["standard_price_ceiling"] != expected_price_ceiling
+    ):
+        raise ValueError(
+            "standard_price_ceiling is fixed by the selected rules profile"
+        )
+    values["standard_price_ceiling"] = expected_price_ceiling
     if "advanced_track_dividends" not in overrides:
         values["advanced_track_dividends"] = bool(
             values.get("advanced_price_tracks")
@@ -718,6 +828,24 @@ def _normalise_rule_set(parameters: GameParameters) -> RuleSet:
     values["market_action_cards"] = bool(
         values.get("stock_boom_cards", False) or values.get("stock_bust_cards", False)
     )
+
+    if profile == RulesProfile.LITE.value:
+        unsupported_lite_rules = {
+            "stock_splits": "stock splits",
+            "repeat_split_bonus": "repeat-split bonuses",
+            "majority_bonus": "majority-shareholder bonuses",
+            "advanced_price_tracks": "advanced price tracks",
+            "advanced_track_dividends": "advanced-track dividends",
+        }
+        enabled_unsupported = [
+            label
+            for key, label in unsupported_lite_rules.items()
+            if _decode_bool_scalar(values.get(key, False), name=key)
+        ]
+        if enabled_unsupported:
+            raise ValueError(
+                "Lite does not support " + ", ".join(enabled_unsupported)
+            )
 
     companies = int(values["company_count"])
     starting_shares_per_player = int(values.get("starting_shares_per_player", 1))
@@ -846,6 +974,7 @@ def _normalise_rule_set(parameters: GameParameters) -> RuleSet:
         starting_shares_per_player=starting_shares_per_player,
         starting_cash=int(values["starting_cash"]),
         starting_price=int(values.get("starting_price", 5)),
+        standard_price_ceiling=cast(int | None, values["standard_price_ceiling"]),
         bid_values=bids,
         forecast_values=forecasts,
         stockpile_count=piles,
@@ -1217,6 +1346,12 @@ class GameState(pyspiel.State):
         self.discards: list[Card] = []
         self.history_records: list[dict[str, Any]] = []
         self.pending_events: list[AutomaticEventRecord] = []
+        # Presentation events deliberately use an independent sequence and are
+        # excluded from information states, tensors, action histories, and
+        # state serialization. Replaying explicit OpenSpiel actions rebuilds
+        # the journal deterministically in :meth:`clone`.
+        self._presentation_events: list[PresentationEventRecord] = []
+        self._presentation_sequence = 0
         self.terminal_status = False
         self._sequence = 0
         self._preset = initial_input
@@ -2270,14 +2405,26 @@ class GameState(pyspiel.State):
         )
         self._next_card_id += 1
         steps = 2 if direction == "boom" else -2
-        self._move_price(company, steps)
+        self._move_price(
+            company,
+            steps,
+            cause="market_impact",
+            actor_id=player,
+            effect=direction,
+        )
         self._selected_direction = None
         self._set_action_actor()
 
     def _commit_cramer_action(self, player: int, company: int) -> None:
         assert self._selected_direction is not None
         steps = 1 if self._selected_direction == "boom" else -1
-        self._move_price(company, steps)
+        self._move_price(
+            company,
+            steps,
+            cause="investor_action",
+            actor_id=player,
+            effect=self._selected_direction,
+        )
         self._selected_direction = None
         self._investor_used.add((player, "crazy_cramer", self.round))
         self._set_action_actor()
@@ -2467,6 +2614,18 @@ class GameState(pyspiel.State):
                 if pair in player.private_information and pair not in player.revealed_information:
                     player.revealed_information.append(pair)
             if forecast == "DIVIDEND":
+                self._record_presentation_market_event(
+                    event_type="market_reveal",
+                    cause="market_forecast",
+                    company=company,
+                    prior_price=self._company_price(company),
+                    requested_delta=None,
+                    resulting_price=self._company_price(company),
+                    forecast=forecast,
+                    description=(
+                        f"{self.rule_set.company_names[company]} revealed a dividend"
+                    ),
+                )
                 holders = deque(
                     (player_id, represented)
                     for player_id in self._turn_order()
@@ -2483,7 +2642,12 @@ class GameState(pyspiel.State):
                     return
                 self._pay_dividend(company, amount_per_share=2)
             else:
-                self._move_price(company, int(forecast))
+                self._move_price(
+                    company,
+                    int(forecast),
+                    cause="market_forecast",
+                    forecast=forecast,
+                )
         self._begin_deborah_or_finish_round()
 
     def _commit_dividend(self, player: int, ordinal: int) -> None:
@@ -2560,8 +2724,29 @@ class GameState(pyspiel.State):
         state = self.players[player]
         return state.regular_portfolio[company] + 2 * state.split_portfolio[company]
 
-    def _move_price(self, company: int, movement: int) -> None:
+    def _move_price(
+        self,
+        company: int,
+        movement: int,
+        *,
+        cause: str = "rule",
+        actor_id: int | None = None,
+        forecast: int | str | None = None,
+        effect: str | None = None,
+    ) -> None:
+        prior_price = self._company_price(company)
         if movement == 0:
+            self._record_presentation_market_event(
+                event_type="market_movement",
+                cause=cause,
+                company=company,
+                prior_price=prior_price,
+                requested_delta=0,
+                resulting_price=prior_price,
+                forecast=forecast,
+                effect=effect,
+                actor_id=actor_id,
+            )
             return
         direction = 1 if movement > 0 else -1
         for _ in range(abs(movement)):
@@ -2598,9 +2783,10 @@ class GameState(pyspiel.State):
                 continue
 
             price = self._company_price(company)
-            if direction > 0 and price >= 10:
+            ceiling = self.rule_set.standard_price_ceiling
+            if direction > 0 and ceiling is not None and price >= ceiling:
                 if not self.rule_set.stock_splits:
-                    self._set_company_price(company, 10)
+                    self._set_company_price(company, ceiling)
                     continue
                 self._trigger_split(company)
                 self._set_company_price(company, 6)
@@ -2613,6 +2799,62 @@ class GameState(pyspiel.State):
                 break
             else:
                 self._set_company_price(company, price + direction)
+
+        self._record_presentation_market_event(
+            event_type="market_movement",
+            cause=cause,
+            company=company,
+            prior_price=prior_price,
+            requested_delta=movement,
+            resulting_price=self._company_price(company),
+            forecast=forecast,
+            effect=effect,
+            actor_id=actor_id,
+        )
+
+    def _record_presentation_market_event(
+        self,
+        *,
+        event_type: str,
+        cause: str,
+        company: int,
+        prior_price: int,
+        requested_delta: int | None,
+        resulting_price: int,
+        forecast: int | str | None = None,
+        effect: str | None = None,
+        actor_id: int | None = None,
+        description: str | None = None,
+    ) -> None:
+        """Append a public UI event without touching gameplay sequencing."""
+
+        actual_delta = resulting_price - prior_price
+        company_name = self.rule_set.company_names[company]
+        if description is None:
+            sign = "+" if actual_delta > 0 else ""
+            description = (
+                f"{company_name} moved {sign}{actual_delta} "
+                f"to ${resulting_price}K"
+            )
+        self._presentation_sequence += 1
+        self._presentation_events.append(
+            PresentationEventRecord(
+                presentation_sequence=self._presentation_sequence,
+                round=self.round,
+                event_type=event_type,
+                cause=cause,
+                company_id=company,
+                company_name=company_name,
+                prior_price=prior_price,
+                requested_delta=requested_delta,
+                actual_delta=actual_delta,
+                resulting_price=resulting_price,
+                forecast=forecast,
+                effect=effect,
+                actor_id=actor_id,
+                description=description,
+            )
+        )
 
     def _trigger_split(self, company: int) -> None:
         for player in self.players:
@@ -3090,6 +3332,7 @@ def get_parameter_preset(
         "fees",
         "dividend",
         "dividends",
+        "impact",
         "split",
         "majority",
         "stock_tracks",
@@ -3114,6 +3357,32 @@ def get_parameter_preset(
             f"{canonical_name} preset does not allow rule overrides: "
             + ", ".join(unsupported)
         )
+    if canonical_name != RulesProfile.LITE.value and "impact" in overrides:
+        raise ValueError("impact is configurable only in Lite")
+    if canonical_name == RulesProfile.LITE.value:
+        unsupported_lite_overrides = {
+            "split": "stock splits",
+            "stock_splits": "stock splits",
+            "repeat_split_bonus": "repeat-split bonuses",
+            "majority": "majority-shareholder bonuses",
+            "majority_bonus": "majority-shareholder bonuses",
+            "stock_tracks": "advanced price tracks",
+            "tracks": "advanced price tracks",
+            "advanced_price_tracks": "advanced price tracks",
+            "advanced_track_dividends": "advanced-track dividends",
+        }
+        enabled_unsupported = sorted(
+            {
+                label
+                for key, label in unsupported_lite_overrides.items()
+                if key in overrides
+                and _decode_bool_scalar(overrides[key], name=key)
+            }
+        )
+        if enabled_unsupported:
+            raise ValueError(
+                "Lite does not support " + ", ".join(enabled_unsupported)
+            )
     if "starting_share" in overrides:
         _decode_bool_scalar(overrides["starting_share"], name="starting_share")
     if "starting_shares_per_player" in overrides and int(
@@ -3358,6 +3627,198 @@ def _legal_action_objects(state: GameState, player_id: int) -> list[LegalAction]
     return actions
 
 
+def get_presentation_state(
+    rule_set: RuleSet,
+    game_state: GameState,
+    viewer_id: int | None = None,
+) -> PresentationState:
+    """Return browser-safe staged context without expanding observations.
+
+    The accessor intentionally lives beside, rather than inside,
+    :func:`observe_game_state`. In particular, its fields never participate in
+    an information-state identity or tensor. Supply and partially selected
+    Demand/Action decisions are visible only to the acting viewer. Default
+    sealed selling additionally redacts the actor and company from every other
+    viewer and from spectators.
+    """
+
+    if game_state.rule_set != rule_set:
+        raise ValueError("game state and RuleSet do not match")
+    if viewer_id is not None and not 0 <= viewer_id < rule_set.player_count:
+        raise ValueError("viewer_id out of range")
+
+    current = int(game_state.current_player())
+    actor = current if current >= 0 else None
+    viewer_is_actor = viewer_id is not None and actor == viewer_id
+    sealed_selling = (
+        game_state.phase == Phase.SELLING.value
+        and not rule_set.sequential_observable_selling
+    )
+    stage = game_state.stage
+    if sealed_selling and not viewer_is_actor:
+        actor = None
+        stage = "private_selling"
+
+    markers = tuple(
+        BidMarkerPresentation(
+            stockpile_id=pile.stockpile_id,
+            player_id=int(pile.occupying_player),
+            marker_index=int(pile.occupying_token),
+            bid_value=rule_set.bid_values[int(pile.bid_level)],
+            status="locked" if pile.locked else "leading",
+        )
+        for pile in game_state.stockpiles
+        if pile.occupying_player is not None
+        and pile.occupying_token is not None
+        and pile.bid_level is not None
+    )
+
+    demand_token = (
+        tuple(game_state._demand_token)
+        if game_state.phase == Phase.DEMAND.value
+        and game_state._demand_token is not None
+        else None
+    )
+    demand_pile = (
+        game_state._demand_pile
+        if game_state.phase == Phase.DEMAND.value and viewer_is_actor
+        else None
+    )
+    supply_choice = (
+        game_state._supply_choice
+        if game_state.phase == Phase.SUPPLY.value and viewer_is_actor
+        else None
+    )
+    supply_up_pile = (
+        game_state._supply_up_pile
+        if game_state.phase == Phase.SUPPLY.value and viewer_is_actor
+        else None
+    )
+    selected_direction = (
+        game_state._selected_direction
+        if game_state.phase == Phase.ACTION.value and viewer_is_actor
+        else None
+    )
+    selling_company = None
+    if game_state.phase == Phase.SELLING.value:
+        if rule_set.sequential_observable_selling or viewer_is_actor:
+            selling_company = game_state._selling_company
+
+    return PresentationState(
+        phase=game_state.phase,
+        stage=stage,
+        current_actor=actor,
+        demand_token=cast(tuple[int, int] | None, demand_token),
+        demand_pile=demand_pile,
+        supply_choice=supply_choice,
+        supply_up_pile=supply_up_pile,
+        selected_direction=selected_direction,
+        selling_company=selling_company,
+        stockpile_markers=markers,
+    )
+
+
+def get_presentation_events(
+    rule_set: RuleSet,
+    game_state: GameState,
+    *,
+    since_sequence: int = 0,
+) -> tuple[PresentationEventRecord, ...]:
+    """Return replay-stable public events newer than ``since_sequence``."""
+
+    if game_state.rule_set != rule_set:
+        raise ValueError("game state and RuleSet do not match")
+    if isinstance(since_sequence, bool) or not isinstance(since_sequence, int):
+        raise TypeError("since_sequence must be an integer")
+    if since_sequence < 0:
+        raise ValueError("since_sequence must be non-negative")
+    return tuple(
+        event
+        for event in game_state._presentation_events
+        if event.presentation_sequence > since_sequence
+    )
+
+
+def preview_sale_action(
+    rule_set: RuleSet,
+    game_state: GameState,
+    player_id: int,
+    action_id: int,
+) -> SalePreview:
+    """Preview one currently legal sale without mutating authoritative state."""
+
+    if game_state.rule_set != rule_set:
+        raise ValueError("game state and RuleSet do not match")
+    if not 0 <= player_id < rule_set.player_count:
+        raise ValueError("player_id out of range")
+    if isinstance(action_id, bool) or not isinstance(action_id, int):
+        raise TypeError("action_id must be an integer")
+    if (
+        game_state.phase != Phase.SELLING.value
+        or game_state.stage != "selling"
+        or game_state.current_player() != player_id
+    ):
+        raise ValueError("sale preview is available only to the current seller")
+    if action_id not in game_state._legal_actions(player_id):
+        raise ValueError("sale action is not currently legal")
+
+    namespace, ordinal = rule_set.action_codec.decode(action_id)
+    if namespace not in {"done", "sell_all", "sale_mode"}:
+        raise ValueError("action is not a sale decision")
+    company = game_state._selling_company
+    observed_regular, observed_split = game_state._selling_holdings(player_id)
+    regular = int(observed_regular[company])
+    split = int(observed_split[company])
+    quantity = 0
+    if namespace == "sell_all":
+        quantity = regular + 2 * split
+        regular = 0
+        split = 0
+    elif namespace == "sale_mode":
+        if ordinal == 0:
+            quantity = 1
+            regular -= 1
+        elif ordinal == 1:
+            quantity = 1
+            split -= 1
+            regular += 1
+        elif ordinal == 2:
+            quantity = regular + 2 * split
+            regular = 0
+            split = 0
+        else:  # Defensive against a future wider sale namespace.
+            raise ValueError("unsupported sale mode")
+
+    unit_price = game_state._company_price(company)
+    per_share_bonus = (
+        1 if "golden_graham" in game_state.players[player_id].investors else 0
+    )
+    label = {
+        "done": "Hold",
+        "sell_all": "Sell all",
+    }.get(namespace)
+    if namespace == "sale_mode":
+        label = {
+            0: "Sell one share",
+            1: "Sell one split share",
+            2: "Sell all",
+        }[ordinal]
+    assert label is not None
+    return SalePreview(
+        action_id=action_id,
+        action_type=namespace,
+        label=label,
+        company_id=company,
+        company_name=rule_set.company_names[company],
+        quantity_sold=quantity,
+        unit_price=unit_price,
+        gross_value=quantity * (unit_price + per_share_bonus),
+        resulting_regular=regular,
+        resulting_split=split,
+        resulting_represented=regular + 2 * split,
+    )
+
+
 def observe_game_state(
     rule_set: RuleSet,
     game_state: GameState,
@@ -3580,6 +4041,48 @@ def score_game(rule_set: RuleSet, game_state: GameState) -> GameResult:
         winner_ids=winners,
         utilities=_training_utilities(tuple(final_cash.values()), winners),
     )
+
+
+def terminal_liquidation_details(
+    rule_set: RuleSet,
+    game_state: GameState,
+) -> tuple[TerminalPlayerLiquidation, ...]:
+    """Return presentation-ready terminal liquidation and tied rankings."""
+
+    if game_state.rule_set != rule_set:
+        raise ValueError("game state and RuleSet do not match")
+    if not game_state.is_terminal():
+        raise ValueError("terminal liquidation is available only at game end")
+    result = score_game(rule_set, game_state)
+    final_cash_values = tuple(result.final_cash_by_player.values())
+    winner_ids = set(result.winner_ids)
+    rows: list[TerminalPlayerLiquidation] = []
+    for player in range(rule_set.player_count):
+        companies = tuple(
+            TerminalCompanyLiquidation(
+                company_id=company,
+                company_name=rule_set.company_names[company],
+                represented_shares=game_state._represented_shares(player, company),
+                unit_price=game_state._company_price(company),
+                value=(
+                    game_state._represented_shares(player, company)
+                    * game_state._company_price(company)
+                ),
+            )
+            for company in range(rule_set.company_count)
+        )
+        cash = int(result.final_cash_by_player[player])
+        rows.append(
+            TerminalPlayerLiquidation(
+                player_id=player,
+                companies=companies,
+                liquidation_value=int(result.liquidation_values[player]),
+                final_cash=cash,
+                rank=1 + sum(other > cash for other in final_cash_values),
+                winner=player in winner_ids,
+            )
+        )
+    return tuple(rows)
 
 
 def run_game(
@@ -3863,6 +4366,7 @@ __all__ = [
     "ActionRecord",
     "ActionRequest",
     "AutomaticEventRecord",
+    "BidMarkerPresentation",
     "Card",
     "ConfiguredGame",
     "GameParameters",
@@ -3877,21 +4381,30 @@ __all__ = [
     "Phase",
     "PlayerState",
     "Playthrough",
+    "PresentationEventRecord",
+    "PresentationState",
     "RuleSet",
     "RulesProfile",
+    "SalePreview",
     "Stockpile",
     "StockpileGame",
+    "TerminalCompanyLiquidation",
+    "TerminalPlayerLiquidation",
     "ValidationReport",
     "advance_game",
     "complexity_report",
     "compute_information_set_complexity",
     "configure_game",
     "get_parameter_preset",
+    "get_presentation_events",
+    "get_presentation_state",
     "initialize_game",
     "load_game_state",
     "observe_game_state",
     "randomize_initial_input",
+    "preview_sale_action",
     "resolve_automatic_events",
     "run_game",
     "score_game",
+    "terminal_liquidation_details",
 ]

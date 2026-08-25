@@ -1,0 +1,492 @@
+.game {
+  min-height: 100vh;
+  color: var(--black);
+  background: var(--white);
+  font-size: var(--secondary-size);
+  font-weight: 400;
+}
+
+.game *,
+.game *::before,
+.game *::after {
+  box-sizing: border-box;
+  font-weight: 400;
+}
+
+.workstation {
+  display: grid;
+  grid-template-columns: minmax(176px, 20fr) minmax(500px, 58fr) minmax(190px, 22fr);
+  grid-template-rows: 42px minmax(0, .9fr) minmax(0, 1fr) minmax(0, 1fr) clamp(118px, 18vh, 160px);
+  grid-template-areas:
+    "status status status"
+    "market stockpiles portfolio"
+    "research stockpiles portfolio"
+    "research stockpiles players"
+    "dock dock dock";
+  gap: 1px;
+  width: 100%;
+  height: 100vh;
+  background: var(--black);
+}
+
+.module {
+  min-width: 0;
+  min-height: 0;
+  background: var(--white);
+}
+
+.status {
+  grid-area: status;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  padding: 0 22px;
+  letter-spacing: .08em;
+}
+.status span:nth-child(2) { justify-self: center; }
+.status span:last-child { justify-self: end; }
+
+.market {
+  grid-area: market;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 14px;
+  padding: 18px;
+  overflow: hidden;
+}
+.marketList {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+.marketCompany {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) 12ch 4ch;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.marketCompany .stockPattern { width: 20px; height: 14px; }
+.marketName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.marketPrice {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+.marketDelta {
+  min-width: 0;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.research {
+  grid-area: research;
+  padding: 18px;
+  overflow: auto;
+}
+.informationList {
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
+}
+.informationPair {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.stockpileField {
+  grid-area: stockpiles;
+  overflow: auto;
+  padding: 20px;
+}
+.stockpileGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: minmax(210px, 1fr);
+  align-content: center;
+  gap: 22px;
+  min-height: 100%;
+}
+.stockpile {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto 15px;
+  min-width: 0;
+  min-height: 200px;
+  align-content: center;
+  justify-items: center;
+  gap: 10px;
+  transition: transform 120ms linear;
+}
+.stockpileExpanded { grid-template-rows: auto 15px; }
+.stockpileSelected { transform: translateY(-4px); }
+.pileTarget {
+  appearance: none;
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  padding: 0;
+  border: 0;
+  color: var(--black);
+  background: transparent;
+  cursor: pointer;
+}
+.pileTarget:focus-visible {
+  outline: 1px solid var(--black);
+  outline-offset: -3px;
+}
+.pileTarget:disabled { cursor: default; }
+.stackInspect {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  width: max-content;
+  height: max-content;
+  min-width: 104px;
+  min-height: 139px;
+  place-items: start;
+  color: var(--black);
+  background: transparent;
+  cursor: pointer;
+}
+.stockpileExpanded .stackInspect {
+  width: auto;
+  height: auto;
+}
+.stackInspect:focus-visible {
+  outline: 1px solid var(--black);
+  outline-offset: 3px;
+}
+.bid {
+  position: relative;
+  z-index: 2;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .06em;
+  white-space: nowrap;
+  pointer-events: none;
+  color: var(--black);
+}
+
+.stack {
+  position: relative;
+  display: block;
+  width: 104px;
+  height: 139px;
+}
+.stackLayer {
+  --stack-index: 0;
+  position: absolute;
+  top: calc(var(--stack-index) * 3px);
+  left: calc(var(--stack-index) * 10px);
+}
+.stackExpanded {
+  display: grid;
+  grid-template-columns: repeat(2, 104px);
+  width: auto;
+  height: auto;
+  gap: 8px;
+}
+.stackExpanded .stackLayer {
+  position: relative;
+  top: auto;
+  left: auto;
+}
+.blankCard { background: var(--white); }
+
+.stockCard { color: var(--blue); }
+.stockPattern {
+  width: 82%;
+  height: 72%;
+  color: var(--blue);
+  fill: currentColor;
+}
+.cardValue {
+  position: absolute;
+  right: 6px;
+  bottom: 4px;
+  color: var(--black);
+  font-size: var(--primary-size);
+  font-variant-numeric: tabular-nums;
+}
+[data-card-scale="portfolio"] .cardValue,
+[data-card-scale="active"] .cardValue,
+[data-card-scale="information"] .cardValue {
+  right: 3px;
+  bottom: 2px;
+  font-size: var(--secondary-size);
+}
+.cardSignal {
+  font-size: var(--primary-size);
+  font-variant-numeric: tabular-nums;
+}
+.positive { color: var(--green); }
+.negative { color: var(--red); }
+.neutral { color: var(--black); }
+.hiddenCard {
+  border-color: var(--blue);
+  background: var(--blue);
+}
+.faceDownFlag {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  padding: 2px;
+  color: var(--white);
+  background: var(--black);
+  font-size: var(--secondary-size);
+  letter-spacing: .04em;
+}
+
+.portfolio,
+.players {
+  padding: 18px;
+  overflow: auto;
+}
+.portfolio { grid-area: portfolio; }
+.portfolioCards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, 54px);
+  gap: 10px;
+  margin-top: 16px;
+}
+.players { grid-area: players; }
+.playerList {
+  display: grid;
+  gap: 22px;
+  margin-top: 18px;
+}
+.player {
+  display: grid;
+  gap: 8px;
+}
+.metric {
+  display: grid;
+  grid-template-columns: 8ch 6ch 7ch;
+  justify-content: start;
+  gap: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.playerDelta { white-space: nowrap; }
+
+.actionDock {
+  grid-area: dock;
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 20px;
+  padding: 14px 22px;
+  overflow: hidden;
+}
+.dockHeading {
+  display: grid;
+  gap: 10px;
+}
+.dockContents {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+  overflow-x: auto;
+  padding: 6px 3px;
+}
+.dockControls {
+  display: grid;
+  grid-template-columns: 144px 144px;
+  gap: 10px;
+}
+.controlSlot {
+  display: block;
+  width: 144px;
+  height: 36px;
+}
+.selectable {
+  appearance: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: transform 120ms linear;
+}
+.selectable:disabled { cursor: default; }
+.selectable:focus-visible {
+  outline: 1px solid var(--black);
+  outline-offset: 2px;
+}
+.selected { transform: translateY(-4px); }
+.objectControl {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: var(--white);
+  text-align: initial;
+}
+.cardAction {
+  display: grid;
+  flex: none;
+  justify-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: var(--white);
+}
+
+.whiteOutObject,
+.whiteOutRegion { position: relative; }
+.whiteOutObject::after,
+.whiteOutRegion::after {
+  content: "";
+  position: absolute;
+  z-index: 8;
+  inset: 0;
+  background: rgba(255, 255, 255, .68);
+  pointer-events: none;
+}
+
+.terminal {
+  display: grid;
+  align-content: start;
+  gap: 18px;
+}
+.rankings {
+  display: grid;
+  gap: 18px;
+}
+.ranking {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: 12px;
+}
+.liquidation {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+}
+.liquidation > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.liquidation .stockPattern {
+  width: 20px;
+  height: 14px;
+}
+.terminalChart {
+  display: grid;
+  width: 100%;
+  gap: 12px;
+  margin: 4px 0 0;
+}
+.chartRow {
+  /* Match .ranking columns so chart labels sit under "#N YOU/COMPUTER". */
+  display: grid;
+  grid-template-columns: 34px 74px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+}
+.chartLabel {
+  grid-column: 2;
+}
+.chartTrack {
+  grid-column: 3;
+  position: relative;
+  display: block;
+  height: 22px;
+}
+.positionSegment,
+.cashSegment,
+.zeroLine {
+  position: absolute;
+  top: 0;
+  height: 20px;
+}
+.positionSegment { background: var(--blue); }
+.cashSegment {
+  border: 1px solid var(--blue);
+  background: var(--white);
+}
+.zeroLine {
+  z-index: 2;
+  width: 1px;
+  background: var(--black);
+}
+
+.errorBanner {
+  position: fixed;
+  z-index: 20;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 10px 16px;
+  color: var(--white);
+  background: var(--black);
+}
+.centerState {
+  display: grid;
+  min-height: 100vh;
+  place-content: center;
+  justify-items: center;
+  gap: 14px;
+  color: var(--black);
+  background: var(--white);
+  font-size: var(--secondary-size);
+}
+
+@media (max-width: 1100px) {
+  .workstation { grid-template-columns: minmax(160px, 18fr) minmax(440px, 58fr) minmax(180px, 24fr); }
+  .market,
+  .research,
+  .portfolio,
+  .players { padding: 12px; }
+  .marketCompany { grid-template-columns: 15px minmax(0, 1fr) 12ch 4ch; gap: 5px; }
+  .marketCompany .stockPattern { width: 15px; height: 11px; }
+  .actionDock { grid-template-columns: 94px minmax(0, 1fr) auto; padding-inline: 12px; gap: 10px; }
+}
+
+@media (max-width: 899px) {
+  .workstation {
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 42px auto minmax(560px, 1fr) minmax(170px, auto) minmax(170px, auto) minmax(120px, auto);
+    grid-template-areas:
+      "status status"
+      "market market"
+      "stockpiles stockpiles"
+      "research portfolio"
+      "research players"
+      "dock dock";
+    height: auto;
+    min-height: 100vh;
+  }
+  .marketList { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .stockpileField { overflow: visible; }
+}
+
+@media (max-width: 680px) {
+  .workstation {
+    grid-template-columns: 1fr;
+    grid-template-rows: 42px auto minmax(720px, auto) auto auto auto auto;
+    grid-template-areas:
+      "status"
+      "market"
+      "stockpiles"
+      "research"
+      "portfolio"
+      "players"
+      "dock";
+  }
+  .status { padding-inline: 10px; }
+  .marketList { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stockpileGrid { grid-template-columns: 1fr; }
+  .actionDock {
+    grid-template-columns: 1fr;
+    overflow: visible;
+  }
+  .dockControls {
+    justify-self: end;
+    gap: 8px;
+  }
+}
